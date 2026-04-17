@@ -150,15 +150,46 @@ function inlineSenderName(item: ChatMessage): string | null {
   return null;
 }
 
+/**
+ * Разбиение текста на куски: http(s), ftp, tg, mailto, www.…, t.me / telegram.me
+ * (www и t.me без схемы — при открытии подставляется https://)
+ */
+const CHAT_LINK_SPLIT_RE =
+  /(https?:\/\/[^\s]+|ftp:\/\/[^\s]+|tg:\/\/[^\s]+|mailto:[^\s]+|\bwww\.[^\s]+|\b(?:t\.me|telegram\.me)\/[^\s]+)/gi;
+
+/** Знаки, часто «приклеивающиеся» к ссылке из текста предложения. */
+function trimUrlTrailingJunk(raw: string): string {
+  return raw.replace(/[`'".,;:!?)\]}»]+$/gu, '');
+}
+
+function isChatLinkToken(part: string): boolean {
+  const t = trimUrlTrailingJunk(part);
+  return (
+    /^https?:\/\//i.test(t) ||
+    /^ftp:\/\//i.test(t) ||
+    /^tg:\/\//i.test(t) ||
+    /^mailto:/i.test(t) ||
+    /^www\./i.test(t) ||
+    /^(?:t\.me|telegram\.me)\//i.test(t)
+  );
+}
+
+function hrefForChatLink(part: string): string {
+  const t = trimUrlTrailingJunk(part.trim());
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^www\./i.test(t)) return `https://${t}`;
+  if (/^(?:t\.me|telegram\.me)\//i.test(t)) return `https://${t}`;
+  return t;
+}
+
 function MessageBody({ text, isMine }: { text: string; isMine: boolean }) {
   const { colors, radii } = useTheme();
   const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
-  const parts = text.split(/(https?:\/\/[^\s]+)/gi).filter(Boolean);
+  const parts = text.split(CHAT_LINK_SPLIT_RE).filter(Boolean);
   return (
     <Text style={[styles.msgText, isMine && styles.msgTextMine]} selectable>
       {parts.map((part, idx) => {
-        const isLink = /^https?:\/\//i.test(part);
-        if (!isLink) {
+        if (!isChatLinkToken(part)) {
           return (
             <Text key={`t-${idx}`} style={[styles.msgText, isMine && styles.msgTextMine]}>
               {part}
@@ -169,7 +200,7 @@ function MessageBody({ text, isMine }: { text: string; isMine: boolean }) {
           <Text
             key={`l-${idx}`}
             style={[styles.msgLink, isMine && styles.msgLinkMine]}
-            onPress={() => Linking.openURL(part).catch(() => {})}
+            onPress={() => Linking.openURL(hrefForChatLink(part)).catch(() => {})}
           >
             {part}
           </Text>
