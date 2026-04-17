@@ -13,9 +13,14 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["remote-notification"]
+      }
     },
     "android": {
+      "package": "ru.flowtask220.app",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -25,6 +30,34 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Доступ к фото, чтобы отправлять изображения в чат.",
+          "cameraPermission": "Камера для съёмки фото в чат."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Чтобы сохранять изображения из чата в галерею.",
+          "savePhotosPermission": "Чтобы сохранять изображения в галерею.",
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": ["photo"]
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#2563eb",
+          "defaultChannel": "tasks",
+          "enableBackgroundRemoteNotifications": true,
+          "sounds": []
+        }
+      ]
+    ]
   }
 }
