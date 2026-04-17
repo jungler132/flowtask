@@ -18,11 +18,14 @@ import {
   userListDisplayName,
   type UserListItem,
 } from '../../api/usersApi';
-import { colors, radii } from '../../theme';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 import { sameParticipantId } from './participantIdUtils';
 
 /** Выбранные пользователи: для UI — имя, для API — id. */
 export type PickedUser = { id: string; displayName: string };
+
+type ThemeRadii = (typeof import('../../theme'))['radii'];
 
 type Props = {
   visible: boolean;
@@ -43,6 +46,60 @@ function userMatchesQuery(u: UserListItem, q: string): boolean {
   return name.includes(q) || email.includes(q) || id.includes(q);
 }
 
+function createUserInvitePickerStyles(colors: ThemeColors, radii: ThemeRadii) {
+  return StyleSheet.create({
+    modalRoot: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 16 },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    modalTitle: { fontSize: 20, fontWeight: '700', color: colors.text, flex: 1 },
+    modalHint: { fontSize: 14, color: colors.muted, marginBottom: 12, lineHeight: 20 },
+    modalSearch: {
+      backgroundColor: colors.card,
+      borderRadius: radii.md,
+      padding: 14,
+      fontSize: 16,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 12,
+    },
+    modalLoader: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 200 },
+    loadingHint: { marginTop: 12, fontSize: 14, color: colors.muted },
+    modalList: { flex: 1 },
+    modalListContent: { paddingBottom: 16 },
+    inviteRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      backgroundColor: colors.card,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 8,
+    },
+    inviteRowOn: { borderColor: colors.primary, backgroundColor: colors.chip },
+    inviteRowText: { flex: 1, marginRight: 10 },
+    inviteName: { fontSize: 16, fontWeight: '600', color: colors.text },
+    inviteEmail: { fontSize: 14, color: colors.muted, marginTop: 2 },
+    inviteId: { fontSize: 11, fontFamily: 'monospace', color: colors.muted, marginTop: 4 },
+    muted: { color: colors.muted, fontSize: 14, textAlign: 'center', paddingVertical: 24 },
+    btnPrimary: {
+      backgroundColor: colors.primary,
+      paddingVertical: 14,
+      borderRadius: radii.md,
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    btnPrimaryTxt: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
+    btnDisabled: { opacity: 0.6 },
+  });
+}
+
 export default function UserInvitePickerModal({
   visible,
   onClose,
@@ -52,6 +109,8 @@ export default function UserInvitePickerModal({
   applyBusy = false,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createUserInvitePickerStyles(colors, radii), [colors, radii]);
   const [inviteSearch, setInviteSearch] = useState('');
   const [allUsers, setAllUsers] = useState<UserListItem[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
@@ -89,7 +148,7 @@ export default function UserInvitePickerModal({
 
   function toggleInviteSelect(id: string) {
     setSelectedInviteIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   }
 
@@ -153,11 +212,7 @@ export default function UserInvitePickerModal({
             keyExtractor={(u, i) => userInviteId(u) || `u-${i}`}
             style={styles.modalList}
             contentContainerStyle={styles.modalListContent}
-            ListEmptyComponent={
-              emptyHint ? (
-                <Text style={styles.muted}>{emptyHint}</Text>
-              ) : null
-            }
+            ListEmptyComponent={emptyHint ? <Text style={styles.muted}>{emptyHint}</Text> : null}
             renderItem={({ item }) => {
               const id = userInviteId(item);
               const selected = id && selectedInviteIds.includes(id);
@@ -191,10 +246,7 @@ export default function UserInvitePickerModal({
           />
         )}
         <Pressable
-          style={[
-            styles.btnPrimary,
-            (!selectedInviteIds.length || applyBusy) && styles.btnDisabled,
-          ]}
+          style={[styles.btnPrimary, (!selectedInviteIds.length || applyBusy) && styles.btnDisabled]}
           onPress={handleApply}
           disabled={!selectedInviteIds.length || applyBusy}
         >
@@ -210,55 +262,3 @@ export default function UserInvitePickerModal({
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  modalRoot: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 16 },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: colors.text, flex: 1 },
-  modalHint: { fontSize: 14, color: colors.muted, marginBottom: 12, lineHeight: 20 },
-  modalSearch: {
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    padding: 14,
-    fontSize: 16,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 12,
-  },
-  modalLoader: { flex: 1, justifyContent: 'center', alignItems: 'center', minHeight: 200 },
-  loadingHint: { marginTop: 12, fontSize: 14, color: colors.muted },
-  modalList: { flex: 1 },
-  modalListContent: { paddingBottom: 16 },
-  inviteRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 8,
-  },
-  inviteRowOn: { borderColor: colors.primary, backgroundColor: colors.chip },
-  inviteRowText: { flex: 1, marginRight: 10 },
-  inviteName: { fontSize: 16, fontWeight: '600', color: colors.text },
-  inviteEmail: { fontSize: 14, color: colors.muted, marginTop: 2 },
-  inviteId: { fontSize: 11, fontFamily: 'monospace', color: colors.muted, marginTop: 4 },
-  muted: { color: colors.muted, fontSize: 14, textAlign: 'center', paddingVertical: 24 },
-  btnPrimary: {
-    backgroundColor: colors.primary,
-    paddingVertical: 14,
-    borderRadius: radii.md,
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  btnPrimaryTxt: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
-  btnDisabled: { opacity: 0.6 },
-});

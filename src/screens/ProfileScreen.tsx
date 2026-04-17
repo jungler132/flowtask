@@ -1,5 +1,5 @@
 import type { StackScreenProps } from '@react-navigation/stack';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,12 +7,14 @@ import {
   StyleSheet,
   Text,
   View,
+  type ViewStyle,
 } from 'react-native';
 import { useTabScrollBottomPadding } from '../lib/screenInsets';
 import type { UserProfile } from '../api/authApi';
 import { useAuth } from '../context/AuthContext';
+import { useTheme, type ThemeMode } from '../context/ThemeContext';
 import type { ProfileStackParamList } from '../navigation/types';
-import { colors, radii, shadowCard } from '../theme';
+import type { ThemeColors } from '../theme';
 
 type Props = StackScreenProps<ProfileStackParamList, 'ProfileMain'>;
 
@@ -24,6 +26,12 @@ const WORK_FIELDS: { key: keyof UserProfile | string; label: string }[] = [
   { key: 'department_id', label: 'Подразделение' },
   { key: 'reserve_email', label: 'Запасная почта' },
   { key: 'birth_date', label: 'Дата рождения' },
+];
+
+const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
+  { mode: 'light', label: 'Светлая' },
+  { mode: 'dark', label: 'Тёмная' },
+  { mode: 'system', label: 'Как в системе' },
 ];
 
 function formatValue(v: unknown): string {
@@ -64,9 +72,194 @@ function roleLabel(role: unknown): string {
   return map[r.toLowerCase()] ?? 'Сотрудник';
 }
 
+type ThemeLayout = (typeof import('../theme'))['layout'];
+type ThemeRadii = (typeof import('../theme'))['radii'];
+
+function createProfileStyles(
+  colors: ThemeColors,
+  layout: ThemeLayout,
+  radii: ThemeRadii,
+  shadowCard: ViewStyle,
+) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    content: { padding: 20, paddingBottom: 40 },
+    emptyWrap: {
+      flex: 1,
+      backgroundColor: colors.bg,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    emptyText: {
+      color: colors.muted,
+      fontSize: 16,
+      marginBottom: 20,
+      textAlign: 'center',
+      lineHeight: 24,
+    },
+    hero: {
+      alignItems: 'center',
+      marginBottom: 24,
+    },
+    avatar: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 14,
+    },
+    avatarText: {
+      color: colors.onPrimary,
+      fontSize: 28,
+      fontWeight: '700',
+    },
+    name: {
+      color: colors.text,
+      fontSize: 24,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    email: {
+      color: colors.muted,
+      fontSize: 16,
+      marginTop: 8,
+      textAlign: 'center',
+    },
+    roleChip: {
+      marginTop: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      borderRadius: radii.pill,
+      backgroundColor: colors.chip,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    roleChipText: {
+      color: colors.primary,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: radii.lg,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadowCard,
+      marginBottom: 12,
+    },
+    cardTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 8,
+    },
+    themeRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 4,
+    },
+    themeChip: {
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: radii.md,
+      backgroundColor: colors.chip,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    themeChipActive: {
+      backgroundColor: colors.primarySoft,
+      borderColor: colors.primary,
+      borderWidth: 2,
+    },
+    themeChipText: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    themeChipTextActive: {
+      color: colors.primary,
+      fontWeight: '700',
+    },
+    fieldRow: {
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    fieldRowLast: {
+      borderBottomWidth: 0,
+      paddingBottom: 4,
+    },
+    fieldLabel: {
+      color: colors.muted,
+      fontSize: 15,
+      fontWeight: '600',
+      marginBottom: 6,
+    },
+    fieldValue: {
+      color: colors.text,
+      fontSize: 17,
+      lineHeight: 24,
+    },
+    helpCard: {
+      backgroundColor: colors.card,
+      borderRadius: radii.lg,
+      padding: 18,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      marginBottom: 16,
+    },
+    helpTitle: {
+      color: colors.primary,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 10,
+    },
+    helpHint: {
+      color: colors.text,
+      fontSize: 16,
+      lineHeight: 24,
+    },
+    btn: {
+      marginTop: 4,
+      backgroundColor: colors.primary,
+      paddingVertical: layout.buttonPadV + 2,
+      paddingHorizontal: layout.buttonPadH,
+      borderRadius: radii.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 56,
+    },
+    btnDisabled: { opacity: 0.65 },
+    btnText: { color: colors.onPrimary, fontWeight: '700', fontSize: layout.fontSizeButton },
+    out: {
+      marginTop: 12,
+      paddingVertical: layout.buttonPadV + 2,
+      paddingHorizontal: layout.buttonPadH,
+      borderRadius: radii.md,
+      borderWidth: 2,
+      borderColor: colors.danger,
+      alignItems: 'center',
+      backgroundColor: colors.card,
+      minHeight: 52,
+      justifyContent: 'center',
+    },
+    outText: { color: colors.danger, fontWeight: '700', fontSize: 16 },
+  });
+}
+
 export default function ProfileScreen({ navigation }: Props) {
   const tabScrollBottom = useTabScrollBottomPadding();
   const { user, signOut, refreshProfile } = useAuth();
+  const { colors, layout, radii, shadowCard, mode, setMode } = useTheme();
+  const styles = useMemo(
+    () => createProfileStyles(colors, layout, radii, shadowCard),
+    [colors, layout, radii, shadowCard],
+  );
   const [busy, setBusy] = useState(false);
 
   if (!user) {
@@ -114,6 +307,21 @@ export default function ProfileScreen({ navigation }: Props) {
             <Text style={styles.roleChipText}>{roleLine}</Text>
           </View>
         ) : null}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Тема оформления</Text>
+        <View style={styles.themeRow}>
+          {THEME_OPTIONS.map(({ mode: m, label }) => (
+            <Pressable
+              key={m}
+              onPress={() => setMode(m)}
+              style={[styles.themeChip, mode === m && styles.themeChipActive]}
+            >
+              <Text style={[styles.themeChipText, mode === m && styles.themeChipTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
       <View style={styles.card}>
@@ -166,139 +374,3 @@ export default function ProfileScreen({ navigation }: Props) {
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 20, paddingBottom: 40 },
-  emptyWrap: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  emptyText: {
-    color: colors.muted,
-    fontSize: 16,
-    marginBottom: 20,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  hero: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  avatarText: {
-    color: colors.onPrimary,
-    fontSize: 28,
-    fontWeight: '700',
-  },
-  name: {
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  email: {
-    color: colors.muted,
-    fontSize: 15,
-    marginTop: 6,
-    textAlign: 'center',
-  },
-  roleChip: {
-    marginTop: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    backgroundColor: colors.chip,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  roleChipText: {
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: radii.lg,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadowCard,
-    marginBottom: 12,
-  },
-  cardTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  fieldRow: {
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  fieldRowLast: {
-    borderBottomWidth: 0,
-    paddingBottom: 4,
-  },
-  fieldLabel: {
-    color: colors.muted,
-    fontSize: 13,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  fieldValue: {
-    color: colors.text,
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  helpCard: {
-    backgroundColor: colors.card,
-    borderRadius: radii.lg,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    marginBottom: 16,
-  },
-  helpTitle: {
-    color: colors.primary,
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  helpHint: {
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  btn: {
-    marginTop: 4,
-    backgroundColor: colors.primary,
-    padding: 16,
-    borderRadius: radii.md,
-    alignItems: 'center',
-  },
-  btnDisabled: { opacity: 0.65 },
-  btnText: { color: colors.onPrimary, fontWeight: '600', fontSize: 16 },
-  out: {
-    marginTop: 12,
-    padding: 16,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.danger,
-    alignItems: 'center',
-    backgroundColor: colors.card,
-  },
-  outText: { color: colors.danger, fontWeight: '600', fontSize: 15 },
-});

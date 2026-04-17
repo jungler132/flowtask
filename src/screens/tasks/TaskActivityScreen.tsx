@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -11,18 +11,22 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from 'react-native';
 import { formatApiErrorForUser } from '../../api/client';
 import { fetchActivity, postActivity, Task } from '../../api/tasksApi';
+import { useTheme } from '../../context/ThemeContext';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import type { ThemeColors } from '../../theme';
 import { formatActivityTime } from '../../utils/taskLabels';
 import { taskRouteId, taskTitle } from '../../utils/task';
 
 type Props = StackScreenProps<TasksStackParamList, 'TaskActivity'>;
 
 type ActivityRow = Record<string, unknown>;
+
+type ThemeRadii = (typeof import('../../theme'))['radii'];
 
 function activityDescription(item: ActivityRow): string {
   const d = item.description;
@@ -45,8 +49,84 @@ function activityActionBadge(item: ActivityRow): string {
   return a.trim();
 }
 
+function createTaskActivityStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    headerBlock: {
+      paddingBottom: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      marginBottom: 8,
+    },
+    devToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      gap: 8,
+    },
+    devToggleTxt: { color: colors.muted, fontSize: 14, fontWeight: '500' },
+    form: { paddingHorizontal: 16, paddingBottom: 12 },
+    hint: { color: colors.muted, marginBottom: 8, fontSize: 13 },
+    jsonInput: {
+      backgroundColor: colors.card,
+      color: colors.text,
+      borderRadius: radii.md,
+      padding: 12,
+      minHeight: 80,
+      fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: undefined }),
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    btn: {
+      marginTop: 10,
+      backgroundColor: colors.primary,
+      padding: 14,
+      borderRadius: radii.md,
+      alignItems: 'center',
+    },
+    btnText: { color: colors.onPrimary, fontWeight: '700' },
+    card: {
+      marginHorizontal: 16,
+      marginBottom: 12,
+      padding: 16,
+      backgroundColor: colors.card,
+      borderRadius: radii.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadowCard,
+    },
+    cardTop: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+      marginBottom: 10,
+    },
+    badge: {
+      flexShrink: 1,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: radii.md,
+      backgroundColor: colors.chip,
+      borderWidth: 1,
+      borderColor: colors.border,
+      maxWidth: '70%',
+    },
+    badgeTxt: { color: colors.primary, fontSize: 12, fontWeight: '600' },
+    time: { color: colors.muted, fontSize: 12, flexShrink: 0 },
+    cardBody: { color: colors.text, fontSize: 15, lineHeight: 22 },
+    empty: { textAlign: 'center', color: colors.muted, marginTop: 32, paddingHorizontal: 24 },
+  });
+}
+
 export default function TaskActivityScreen({ route }: Props) {
   const tabScrollBottom = useTabScrollBottomPadding();
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTaskActivityStyles(colors, radii, shadowCard),
+    [colors, radii, shadowCard],
+  );
   const { taskId } = route.params;
   const [items, setItems] = useState<Task[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -93,6 +173,8 @@ export default function TaskActivityScreen({ route }: Props) {
               await load();
               setRefreshing(false);
             }}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
           />
         }
         ListHeaderComponent={
@@ -147,72 +229,3 @@ export default function TaskActivityScreen({ route }: Props) {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  headerBlock: {
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    marginBottom: 8,
-  },
-  devToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
-  },
-  devToggleTxt: { color: colors.muted, fontSize: 14, fontWeight: '500' },
-  form: { paddingHorizontal: 16, paddingBottom: 12 },
-  hint: { color: colors.muted, marginBottom: 8, fontSize: 13 },
-  jsonInput: {
-    backgroundColor: colors.card,
-    color: colors.text,
-    borderRadius: radii.md,
-    padding: 12,
-    minHeight: 80,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: undefined }),
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  btn: {
-    marginTop: 10,
-    backgroundColor: colors.primary,
-    padding: 14,
-    borderRadius: radii.md,
-    alignItems: 'center',
-  },
-  btnText: { color: colors.onPrimary, fontWeight: '700' },
-  card: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    backgroundColor: colors.card,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadowCard,
-  },
-  cardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 10,
-  },
-  badge: {
-    flexShrink: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radii.md,
-    backgroundColor: colors.chip,
-    borderWidth: 1,
-    borderColor: colors.border,
-    maxWidth: '70%',
-  },
-  badgeTxt: { color: colors.primary, fontSize: 12, fontWeight: '600' },
-  time: { color: colors.muted, fontSize: 12, flexShrink: 0 },
-  cardBody: { color: colors.text, fontSize: 15, lineHeight: 22 },
-  empty: { textAlign: 'center', color: colors.muted, marginTop: 32, paddingHorizontal: 24 },
-});

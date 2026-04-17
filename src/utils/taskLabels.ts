@@ -1,6 +1,6 @@
 /** Человекочитаемые подписи для enum-полей задач и чатов (API остаётся на англ. ключах). */
 
-import { colors } from '../theme';
+import type { ThemeColors } from '../theme';
 
 export const TASK_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'todo', label: 'Не начата' },
@@ -38,31 +38,37 @@ export function taskPriorityLabelRu(value: string | undefined | null): string {
 }
 
 /** Цвет тонкой обводки карточки задачи в списке */
-export function taskPriorityBorderColor(value: string | undefined | null): string {
+export function taskPriorityBorderColor(
+  themeColors: ThemeColors,
+  value: string | undefined | null,
+): string {
   const v = String(value ?? '').trim().toLowerCase();
   switch (v) {
     case 'low':
-      return '#22c55e';
+      return themeColors.priorityLow;
     case 'medium':
-      return '#eab308';
+      return themeColors.priorityMedium;
     case 'high':
-      return '#ef4444';
+      return themeColors.priorityHigh;
     case 'urgent':
-      return '#b91c1c';
+      return themeColors.priorityUrgent;
     default:
-      return colors.border;
+      return themeColors.border;
   }
 }
 
 /** Обводка списка: чуть толще, если приоритет известен API */
-export function taskPriorityRowBorder(value: string | undefined | null): {
+export function taskPriorityRowBorder(
+  themeColors: ThemeColors,
+  value: string | undefined | null,
+): {
   borderColor: string;
   borderWidth: number;
 } {
   const v = String(value ?? '').trim().toLowerCase();
   const known = v === 'low' || v === 'medium' || v === 'high' || v === 'urgent';
   return {
-    borderColor: taskPriorityBorderColor(value),
+    borderColor: taskPriorityBorderColor(themeColors, value),
     borderWidth: known ? 2 : 1,
   };
 }

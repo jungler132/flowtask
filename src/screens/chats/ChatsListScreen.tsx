@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   Pressable,
   RefreshControl,
@@ -21,16 +22,44 @@ import {
   extractChatLastMessageAt,
   hydrateLocalReadChats,
   markChatLocallyRead,
+  unreadCountNumber,
 } from '../../lib/chatUnread';
 import { prefetchChatRoom } from '../../lib/chatRoomPrefetch';
 import { ChatsStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 import { parseAttachments, isImageAttachment } from '../../utils/chatAttachments';
 import { chatTypeLabelRu } from '../../utils/taskLabels';
 
 type Props = StackScreenProps<ChatsStackParamList, 'ChatsHome'>;
 
+/** Пока открыт список чатов — тихий опрос, чтобы превью и непрочитанные обновлялись без pull-to-refresh. */
+const CHATS_LIST_POLL_MS = 4000;
+
+/** Время в строке списка (как в Telegram): сегодня — часы, вчера — «Вчера», иначе дата. */
+function formatChatListTime(msOrIso: string | number | undefined): string {
+  if (msOrIso == null || msOrIso === '') return '';
+  const d =
+    typeof msOrIso === 'number'
+      ? new Date(msOrIso)
+      : new Date(String(msOrIso));
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const today = now.toDateString() === d.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (today) {
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+  if (yesterday.toDateString() === d.toDateString()) {
+    return 'Вчера';
+  }
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
 export default function ChatsListScreen({ navigation }: Props) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatsListStyles(colors, radii), [colors, radii]);
   const insets = useSafeAreaInsets();
   const tabScrollBottom = useTabScrollBottomPadding();
   const [items, setItems] = useState<Chat[]>([]);
@@ -122,6 +151,16 @@ export default function ChatsListScreen({ navigation }: Props) {
   useFocusEffect(
     useCallback(() => {
       loadInitial().catch(() => {});
+      const id = setInterval(() => {
+        loadInitial().catch(() => {});
+      }, CHATS_LIST_POLL_MS);
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') loadInitial().catch(() => {});
+      });
+      return () => {
+        clearInterval(id);
+        sub.remove();
+      };
     }, [loadInitial])
   );
 
@@ -172,7 +211,7 @@ export default function ChatsListScreen({ navigation }: Props) {
       ListHeaderComponent={
         <View style={styles.topArea}>
           <View style={styles.searchWrap}>
-            <Ionicons name="search-outline" size={18} color={colors.muted} />
+            <Ionicons name="search-outline" size={16} color={colors.muted} />
             <TextInput
               style={styles.searchInput}
               placeholder="Поиск по чатам"
@@ -183,11 +222,11 @@ export default function ChatsListScreen({ navigation }: Props) {
           </View>
           <View style={styles.actionsRow}>
             <Pressable style={styles.actionBtn} onPress={() => navigation.navigate('ChatFromTask')}>
-              <Ionicons name="briefcase-outline" size={16} color={colors.primary} />
+              <Ionicons name="briefcase-outline" size={15} color={colors.primary} />
               <Text style={styles.actionTxt}>По задаче</Text>
             </Pressable>
             <Pressable style={styles.actionBtn} onPress={() => navigation.navigate('ChatCreate')}>
-              <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+              <Ionicons name="add-circle-outline" size={15} color={colors.primary} />
               <Text style={styles.actionTxt}>Новый чат</Text>
             </Pressable>
           </View>
@@ -211,20 +250,28 @@ export default function ChatsListScreen({ navigation }: Props) {
         const typeRu = chatTypeLabelRu(typeRaw);
         const preview = extractChatLastPreview(item);
         const lastAt = extractChatLastMessageAt(item);
-        const unread = Number(item.unread_count ?? 0);
+        const unread = unreadCountNumber(item.unread_count);
         const iconName =
           typeRaw === 'task'
             ? 'briefcase-outline'
             : typeRaw === 'group'
               ? 'people-outline'
               : 'person-outline';
+        const timeStr = lastAt > 0 ? formatChatListTime(lastAt) : '';
+
         return (
           <Pressable
-            style={styles.row}
+            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
             onPress={async () => {
               if (openingChatId === id) return;
               setOpeningChatId(id);
-              markChatLocallyRead(id, lastAt > 0 ? lastAt : undefined);
+              {
+                const now = Date.now();
+                markChatLocallyRead(
+                  id,
+                  lastAt > 0 ? Math.max(lastAt, now) : now
+                );
+              }
               setItems((prev) =>
                 prev.map((c) => (String(c._id ?? '') === id ? { ...c, unread_count: 0 } : c))
               );
@@ -239,29 +286,42 @@ export default function ChatsListScreen({ navigation }: Props) {
               });
               setOpeningChatId(null);
             }}
+            android_ripple={{ color: colors.chipActive }}
           >
-            <View style={styles.rowHead}>
-              <View style={styles.avatar}>
-                <Ionicons name={iconName} size={22} color={colors.primary} />
-              </View>
-              <View style={styles.rowHeadText}>
-                <Text style={styles.name} numberOfLines={2}>
+            <View style={styles.avatar}>
+              <Ionicons name={iconName} size={20} color={colors.primary} />
+            </View>
+            <View style={styles.rowBody}>
+              <View style={styles.titleRow}>
+                <Text style={styles.name} numberOfLines={1}>
                   {String(item.name ?? 'Чат')}
                 </Text>
-                <View style={styles.typeRow}>
-                  <Text style={styles.typePill}>{typeRu}</Text>
-                  {openingChatId === id ? <Text style={styles.loadingPill}>Открытие…</Text> : null}
-                  {unread > 0 ? <Text style={styles.unreadPill}>{unread}</Text> : null}
+                <View style={styles.titleRight}>
+                  {openingChatId === id ? (
+                    <Text style={styles.metaMuted}>…</Text>
+                  ) : timeStr ? (
+                    <Text style={styles.time}>{timeStr}</Text>
+                  ) : null}
                 </View>
               </View>
+              <View style={styles.previewRow}>
+                {preview ? (
+                  <Text style={styles.preview} numberOfLines={2}>
+                    <Text style={styles.previewPrefix}>{typeRu} · </Text>
+                    {preview}
+                  </Text>
+                ) : (
+                  <Text style={styles.previewEmpty} numberOfLines={2}>
+                    Нет сообщений
+                  </Text>
+                )}
+                {unread > 0 ? (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadBadgeTxt}>{unread > 99 ? '99+' : unread}</Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
-            {preview ? (
-              <Text style={styles.preview} numberOfLines={2}>
-                {preview}
-              </Text>
-            ) : (
-              <Text style={styles.previewMuted}>Нет сообщений</Text>
-            )}
           </Pressable>
         );
       }}
@@ -270,100 +330,143 @@ export default function ChatsListScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createChatsListStyles(colors: ThemeColors, radii: ThemeRadii) {
+  return StyleSheet.create({
+
   root: { flex: 1, backgroundColor: colors.bg },
-  listContent: { paddingBottom: 24 },
-  topArea: { paddingHorizontal: 16, paddingBottom: 10 },
+  listContent: { paddingBottom: 20, paddingHorizontal: 6 },
+  /** Шапка списка без линии под чатами — только отступ, как единый фон */
+  topArea: {
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
+    backgroundColor: colors.bg,
+  },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.card,
+    backgroundColor: 'transparent',
     borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     marginBottom: 8,
+    minHeight: 42,
   },
   searchInput: {
     flex: 1,
     color: colors.text,
     fontSize: 15,
-    paddingVertical: 10,
-    marginLeft: 8,
+    paddingVertical: 9,
+    marginLeft: 6,
   },
-  actionsRow: { flexDirection: 'row', gap: 8 },
+  actionsRow: { flexDirection: 'row', gap: 6 },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.card,
+    backgroundColor: 'transparent',
+    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radii.md,
-    paddingVertical: 8,
+    paddingVertical: 9,
     gap: 6,
+    minHeight: 40,
   },
   actionTxt: { color: colors.primary, fontSize: 13, fontWeight: '600' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg },
+  /** Строка чата: «полая» — только обводка, без заливки */
   row: {
-    marginHorizontal: 10,
-    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginHorizontal: 8,
+    marginBottom: 6,
     paddingHorizontal: 10,
-    paddingVertical: 10,
-    backgroundColor: colors.card,
-    borderRadius: 14,
+    paddingVertical: 8,
+    backgroundColor: 'transparent',
+    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.border,
-    ...shadowCard,
   },
-  rowHead: { flexDirection: 'row', alignItems: 'flex-start' },
+  rowPressed: {
+    backgroundColor: colors.chip,
+  },
   avatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.chip,
+    backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
   },
-  rowHeadText: { flex: 1, minWidth: 0 },
-  name: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  typeRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 4, gap: 8 },
-  typePill: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.primary,
-    backgroundColor: colors.chip,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radii.md,
-    overflow: 'hidden',
+  rowBody: { flex: 1, minWidth: 0 },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  unreadPill: {
+  name: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  titleRight: { flexShrink: 0, paddingTop: 0 },
+  /** Как у кнопок «По задаче» / «Новый чат» — не сливаться с серым превью */
+  time: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  metaMuted: { fontSize: 13, color: colors.muted },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginTop: 2,
+    gap: 8,
+  },
+  preview: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.muted,
+  },
+  previewPrefix: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  previewEmpty: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.muted,
+    fontStyle: 'italic',
+  },
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeTxt: {
+    color: colors.onPrimary,
     fontSize: 11,
     fontWeight: '700',
-    color: colors.onPrimary,
-    backgroundColor: colors.primary,
-    minWidth: 22,
-    textAlign: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-    overflow: 'hidden',
   },
-  loadingPill: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.muted,
-    backgroundColor: colors.chip,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  preview: { color: colors.muted, marginTop: 6, fontSize: 13, lineHeight: 18 },
-  previewMuted: { color: colors.muted, marginTop: 6, fontSize: 13, fontStyle: 'italic' },
-  empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
-});
+  empty: { textAlign: 'center', color: colors.muted, marginTop: 36, fontSize: 14 },
+  });
+}
+
+

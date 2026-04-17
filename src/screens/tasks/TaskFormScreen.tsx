@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { ViewStyle } from 'react-native';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { formatApiErrorForUser } from '../../api/client';
 import { createTask, fetchTask, updateTask } from '../../api/tasksApi';
@@ -19,7 +20,8 @@ import { KeyboardAvoid } from '../../components/KeyboardAvoid';
 import TaskPickerModal from '../chats/TaskPickerModal';
 import UserInvitePickerModal, { type PickedUser } from '../chats/UserInvitePickerModal';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS,
@@ -48,6 +50,8 @@ function assigneesFieldToString(raw: unknown): string {
 type Props = StackScreenProps<TasksStackParamList, 'TaskForm'>;
 
 export default function TaskFormScreen({ route, navigation }: Props) {
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(() => createTaskFormStyles(colors, radii, shadowCard), [colors, radii, shadowCard]);
   const tabScrollBottom = useTabScrollBottomPadding();
   const editId = route.params?.taskId;
   const [loading, setLoading] = useState(!!editId);
@@ -348,7 +352,12 @@ export default function TaskFormScreen({ route, navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeLayout = (typeof import('../../theme'))['layout'];
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createTaskFormStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+
   root: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg },
@@ -375,7 +384,7 @@ const styles = StyleSheet.create({
     margin: 4,
   },
   chipWide: { minWidth: '46%' },
-  chipOn: { borderColor: colors.primary, backgroundColor: '#dbeafe' },
+  chipOn: { borderColor: colors.primary, backgroundColor: colors.chipActive },
   chipTxt: { color: colors.text, fontSize: 14, fontWeight: '500' },
   chipTxtOn: { color: colors.primary },
   link: { color: colors.primary, fontWeight: '600', fontSize: 14 },
@@ -451,4 +460,7 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.6 },
   saveText: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
-});
+  });
+}
+
+

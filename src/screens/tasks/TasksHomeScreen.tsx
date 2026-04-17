@@ -1,5 +1,5 @@
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -10,12 +10,14 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from 'react-native';
-import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { fetchTasksCreated, fetchTasksMy, fetchTasksPage, Task } from '../../api/tasksApi';
 import { HeaderOutlineButton, HeaderRow } from '../../components/HeaderActions';
+import { useTheme } from '../../context/ThemeContext';
+import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import type { ThemeColors } from '../../theme';
 import { taskRouteId, taskTitle } from '../../utils/task';
 import {
   TASK_PRIORITY_OPTIONS,
@@ -29,8 +31,142 @@ type Props = StackScreenProps<TasksStackParamList, 'TasksHome'>;
 
 type Segment = 'my' | 'created' | 'all';
 
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createTasksHomeStyles(
+  colors: ThemeColors,
+  radii: ThemeRadii,
+  shadowCard: ViewStyle,
+) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    segmentBlock: {
+      paddingHorizontal: 10,
+      paddingTop: 6,
+      paddingBottom: 6,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.bgMuted,
+    },
+    segmentRow: {
+      flexDirection: 'row',
+      gap: 6,
+    },
+    segmentChip: {
+      flex: 1,
+      paddingVertical: 8,
+      paddingHorizontal: 6,
+      borderRadius: radii.sm,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 40,
+    },
+    segmentChipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    segmentChipText: {
+      color: colors.muted,
+      fontSize: 14,
+      fontWeight: '600',
+      textAlign: 'center',
+    },
+    segmentChipTextActive: { color: colors.onPrimary },
+    list: { flex: 1 },
+    /** Отступ до первой карточки задаётся спейсером в конце ListHeader (paddingTop здесь не подходит). */
+    listContent: { paddingTop: 0, paddingBottom: 24 },
+    /** Между сегментами «Все/Мои/…» и блоком поиска+фильтров */
+    filtersTopGap: { marginTop: 10 },
+    /** Между последней строкой шапки и первой карточкой задачи */
+    listHeaderSpacer: { height: 10 },
+    listFill: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    filters: {
+      paddingHorizontal: 10,
+      paddingTop: 8,
+      paddingBottom: 8,
+      /* без нижней линии — иначе на тёмной теме резкий разделитель у списка */
+      backgroundColor: colors.bgMuted,
+    },
+    filterSearch: {
+      backgroundColor: colors.card,
+      borderRadius: radii.sm,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      color: colors.text,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      fontSize: 16,
+      minHeight: 42,
+    },
+    filterGroup: {
+      backgroundColor: colors.card,
+      borderRadius: radii.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: 8,
+      marginBottom: 8,
+    },
+    filterGroupHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-start',
+      marginBottom: 6,
+    },
+    filterLabel: {
+      color: colors.muted,
+      fontSize: 11,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.35,
+    },
+    chipsRow: {
+      gap: 6,
+      paddingRight: 8,
+    },
+    listHeaderBusy: { opacity: 0.6 },
+    filterChip: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: radii.sm,
+      backgroundColor: colors.chip,
+      borderWidth: 1,
+      borderColor: colors.border,
+      minHeight: 34,
+      justifyContent: 'center',
+    },
+    filterChipOn: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    filterChipTxt: { color: colors.text, fontSize: 13, fontWeight: '600' },
+    filterChipTxtOn: { color: colors.onPrimary, fontWeight: '700' },
+    row: {
+      marginHorizontal: 16,
+      marginBottom: 12,
+      padding: 18,
+      backgroundColor: colors.card,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadowCard,
+    },
+    rowTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
+    rowMeta: { color: colors.muted, marginTop: 6, fontSize: 15, lineHeight: 20 },
+    empty: { textAlign: 'center', color: colors.muted, marginTop: 48 },
+  });
+}
+
 export default function TasksHomeScreen({ navigation }: Props) {
   const tabScrollBottom = useTabScrollBottomPadding();
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTasksHomeStyles(colors, radii, shadowCard),
+    [colors, radii, shadowCard],
+  );
   const [segment, setSegment] = useState<Segment>('all');
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,7 +216,7 @@ export default function TasksHomeScreen({ navigation }: Props) {
         setRefreshing(false);
       }
     },
-    [segment, page, search, status, priority]
+    [segment, page, search, status, priority],
   );
 
   useEffect(() => {
@@ -118,7 +254,7 @@ export default function TasksHomeScreen({ navigation }: Props) {
     { key: 'my', label: 'Мои' },
     { key: 'created', label: 'Созданные' },
   ];
-  
+
   const listHeader = (
     <>
       <View style={styles.segmentBlock}>
@@ -138,7 +274,7 @@ export default function TasksHomeScreen({ navigation }: Props) {
       </View>
 
       {segment === 'all' ? (
-        <View style={styles.filters}>
+        <View style={[styles.filters, styles.filtersTopGap]}>
           <TextInput
             style={styles.filterSearch}
             placeholder="Поиск по названию…"
@@ -207,6 +343,7 @@ export default function TasksHomeScreen({ navigation }: Props) {
           </View>
         </View>
       ) : null}
+      <View style={styles.listHeaderSpacer} />
     </>
   );
 
@@ -225,7 +362,12 @@ export default function TasksHomeScreen({ navigation }: Props) {
           ListHeaderComponent={listHeader}
           ListHeaderComponentStyle={fetching ? styles.listHeaderBusy : undefined}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
           }
           onEndReached={loadMore}
           onEndReachedThreshold={0.3}
@@ -235,7 +377,7 @@ export default function TasksHomeScreen({ navigation }: Props) {
             const metaParts: string[] = [];
             if (st) metaParts.push(taskStatusLabelRu(st));
             if (pr) metaParts.push(taskPriorityLabelRu(pr));
-            const border = taskPriorityRowBorder(pr);
+            const border = taskPriorityRowBorder(colors, pr);
             return (
               <Pressable
                 style={[styles.row, { borderColor: border.borderColor, borderWidth: border.borderWidth }]}
@@ -255,123 +397,9 @@ export default function TasksHomeScreen({ navigation }: Props) {
               </Pressable>
             );
           }}
-          ListEmptyComponent={
-            <Text style={styles.empty}>Нет задач</Text>
-          }
+          ListEmptyComponent={<Text style={styles.empty}>Нет задач</Text>}
         />
       )}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  segmentBlock: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bg,
-  },
-  segmentRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  segmentChip: {
-    flex: 1,
-    paddingVertical: 11,
-    paddingHorizontal: 6,
-    borderRadius: radii.md,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 44,
-  },
-  segmentChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  segmentChipText: {
-    color: colors.muted,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  segmentChipTextActive: { color: colors.onPrimary },
-  list: { flex: 1 },
-  listContent: { paddingTop: 10, paddingBottom: 24 },
-  listFill: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  filters: {
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bg,
-  },
-  filterSearch: {
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    color: colors.text,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    fontSize: 16,
-  },
-  filterGroup: {
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 10,
-    marginBottom: 10,
-  },
-  filterGroupHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    marginBottom: 8,
-  },
-  filterLabel: {
-    color: colors.muted,
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  chipsRow: {
-    gap: 8,
-    paddingRight: 10,
-  },
-  listHeaderBusy: { opacity: 0.6 },
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radii.pill,
-    backgroundColor: colors.chip,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  filterChipOn: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  filterChipTxt: { color: colors.text, fontSize: 14, fontWeight: '500' },
-  filterChipTxtOn: { color: colors.onPrimary, fontWeight: '600' },
-  row: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    padding: 16,
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    ...shadowCard,
-  },
-  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
-  rowMeta: { color: colors.muted, marginTop: 4, fontSize: 13 },
-  empty: { textAlign: 'center', color: colors.muted, marginTop: 48 },
-});

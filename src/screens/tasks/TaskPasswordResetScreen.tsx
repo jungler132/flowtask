@@ -1,5 +1,5 @@
 import { StackScreenProps } from '@react-navigation/stack';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,17 +9,69 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from 'react-native';
-import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { ApiError } from '../../api/client';
 import { passwordResetTask } from '../../api/tasksApi';
+import { useTheme } from '../../context/ThemeContext';
+import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { ProfileStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import type { ThemeColors } from '../../theme';
 
 type Props = StackScreenProps<ProfileStackParamList, 'TaskPasswordReset'>;
 
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createTaskPasswordResetStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    content: { padding: 20 },
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: radii.lg,
+      padding: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadowCard,
+    },
+    lead: {
+      color: colors.text,
+      fontSize: 16,
+      lineHeight: 24,
+      marginBottom: 20,
+    },
+    label: { color: colors.muted, marginBottom: 8, fontSize: 14, fontWeight: '600' },
+    input: {
+      backgroundColor: colors.chip,
+      borderRadius: radii.md,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 16,
+      fontSize: 16,
+    },
+    multiline: { minHeight: 120, textAlignVertical: 'top' },
+    btn: {
+      marginTop: 8,
+      backgroundColor: colors.primary,
+      padding: 16,
+      borderRadius: radii.md,
+      alignItems: 'center',
+    },
+    disabled: { opacity: 0.65 },
+    btnText: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
+  });
+}
+
 export default function TaskPasswordResetScreen({ navigation }: Props) {
   const tabScrollBottom = useTabScrollBottomPadding();
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTaskPasswordResetStyles(colors, radii, shadowCard),
+    [colors, radii, shadowCard],
+  );
   const [title, setTitle] = useState('Восстановление пароля от рабочей почты');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
@@ -80,11 +132,7 @@ export default function TaskPasswordResetScreen({ navigation }: Props) {
           placeholderTextColor={colors.muted}
           multiline
         />
-        <Pressable
-          style={[styles.btn, busy && styles.disabled]}
-          onPress={submit}
-          disabled={busy}
-        >
+        <Pressable style={[styles.btn, busy && styles.disabled]} onPress={submit} disabled={busy}>
           {busy ? (
             <ActivityIndicator color={colors.onPrimary} />
           ) : (
@@ -95,44 +143,3 @@ export default function TaskPasswordResetScreen({ navigation }: Props) {
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 20 },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: radii.lg,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadowCard,
-  },
-  lead: {
-    color: colors.text,
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 20,
-  },
-  label: { color: colors.muted, marginBottom: 8, fontSize: 14, fontWeight: '600' },
-  input: {
-    backgroundColor: colors.chip,
-    borderRadius: radii.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  multiline: { minHeight: 120, textAlignVertical: 'top' },
-  btn: {
-    marginTop: 8,
-    backgroundColor: colors.primary,
-    padding: 16,
-    borderRadius: radii.md,
-    alignItems: 'center',
-  },
-  disabled: { opacity: 0.65 },
-  btnText: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
-});

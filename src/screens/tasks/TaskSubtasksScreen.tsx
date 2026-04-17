@@ -1,5 +1,5 @@
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -9,15 +9,32 @@ import {
   View,
 } from 'react-native';
 import { fetchSubtasks, Task } from '../../api/tasksApi';
+import { useTheme } from '../../context/ThemeContext';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors } from '../../theme';
+import type { ThemeColors } from '../../theme';
 import { taskRouteId, taskTitle } from '../../utils/task';
 
 type Props = StackScreenProps<TasksStackParamList, 'TaskSubtasks'>;
 
+function createTaskSubtasksStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    row: {
+      padding: 16,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+    },
+    title: { color: colors.text, fontSize: 16, fontWeight: '600' },
+    meta: { color: colors.muted, marginTop: 4 },
+    empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
+  });
+}
+
 export default function TaskSubtasksScreen({ route, navigation }: Props) {
   const tabScrollBottom = useTabScrollBottomPadding();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createTaskSubtasksStyles(colors), [colors]);
   const { taskId } = route.params;
   const [items, setItems] = useState<Task[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,6 +61,8 @@ export default function TaskSubtasksScreen({ route, navigation }: Props) {
             await load();
             setRefreshing(false);
           }}
+          tintColor={colors.primary}
+          colors={[colors.primary]}
         />
       }
       renderItem={({ item }) => (
@@ -64,15 +83,3 @@ export default function TaskSubtasksScreen({ route, navigation }: Props) {
     />
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  row: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-  },
-  title: { color: colors.text, fontSize: 16, fontWeight: '600' },
-  meta: { color: colors.muted, marginTop: 4 },
-  empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
-});

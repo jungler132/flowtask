@@ -5,13 +5,19 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
+import { useHeaderHeight } from '@react-navigation/elements';
+import { useFocusEffect } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  AppState,
   Dimensions,
   FlatList,
+  InteractionManager,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -22,12 +28,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { KeyboardEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ApiError } from '../../api/client';
+import { ApiError, apiFetch } from '../../api/client';
 import {
+  Chat,
   ChatMessage,
+  chatPathId,
   cursorFromUrl,
   fetchChat,
+  fetchChats,
   fetchMessages,
   markChatRead,
   sendMessage,
@@ -39,7 +49,6 @@ import { consumePrefetchedChatRoom } from '../../lib/chatRoomPrefetch';
 import { markChatLocallyRead } from '../../lib/chatUnread';
 import { getAccessToken } from '../../lib/storage';
 import { ChatsStackParamList } from '../../navigation/types';
-import { colors, radii } from '../../theme';
 import {
   ChatAttachment,
   displayableMessageText,
@@ -49,7 +58,16 @@ import {
   resolveFileUrl,
   shortSenderId,
 } from '../../utils/chatAttachments';
+import { buildForwardContent, extractAttachmentIdsFromMessage } from '../../utils/chatForward';
+import {
+  buildReplyDraftFromMessage,
+  extractReplyMeta,
+  getMessageId,
+  type ReplyDraft,
+} from '../../utils/chatReply';
 import { useAuth } from '../../context/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 
 type Props = StackScreenProps<ChatsStackParamList, 'ChatRoom'>;
 
@@ -75,6 +93,34 @@ function messageTimeMs(item: ChatMessage): number {
 function sortMessagesAsc(list: ChatMessage[]): ChatMessage[] {
   return [...list].sort((a, b) => messageTimeMs(a) - messageTimeMs(b));
 }
+
+/** Ключ для слияния: совпадает с логикой поиска по id в чате. */
+function messageMergeKey(m: ChatMessage): string | null {
+  const id = normId(getMessageId(m));
+  return id ? id.toLowerCase() : null;
+}
+
+/**
+ * Подмешивает последнюю страницу с сервера (самые новые сообщения) в уже открытую историю,
+ * не теряя более старые сообщения после «Ранние сообщения».
+ */
+function mergeLatestMessagePage(prev: ChatMessage[], latestPage: ChatMessage[]): ChatMessage[] {
+  const tail = sortMessagesAsc(latestPage);
+  const map = new Map<string, ChatMessage>();
+  const withoutId: ChatMessage[] = [];
+  for (const m of prev) {
+    const k = messageMergeKey(m);
+    if (k) map.set(k, m);
+    else withoutId.push(m);
+  }
+  for (const m of tail) {
+    const k = messageMergeKey(m);
+    if (k) map.set(k, m);
+  }
+  return sortMessagesAsc([...withoutId, ...map.values()]);
+}
+
+const CHAT_POLL_MS = 4000;
 
 async function downloadAttachmentToLocal(att: ChatAttachment): Promise<string> {
   const url = att.url ? resolveFileUrl(att.url) : '';
@@ -105,6 +151,8 @@ function inlineSenderName(item: ChatMessage): string | null {
 }
 
 function MessageBody({ text, isMine }: { text: string; isMine: boolean }) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const parts = text.split(/(https?:\/\/[^\s]+)/gi).filter(Boolean);
   return (
     <Text style={[styles.msgText, isMine && styles.msgTextMine]} selectable>
@@ -138,6 +186,9 @@ function MessageBubble({
   onOpenAttachment,
   showGroupSender,
   resolvedSenderName,
+  replyMeta,
+  onOpenActions,
+  onNavigateToReply,
 }: {
   item: ChatMessage;
   mySenderId: string;
@@ -147,7 +198,12 @@ function MessageBubble({
   showGroupSender: boolean;
   /** Имя с API пользователей; пустая строка = ещё грузим. */
   resolvedSenderName: string;
+  replyMeta: ReplyDraft | null;
+  onOpenActions: () => void;
+  onNavigateToReply: (messageId: string) => void;
 }) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const sid = normId(String(item.sender_id ?? ''));
   const isMine =
     sid !== '' && comparableUserId(sid) === comparableUserId(mySenderId);
@@ -162,8 +218,31 @@ function MessageBubble({
       : null;
 
   return (
-    <View style={[styles.msgRow, isMine && styles.msgRowMine]}>
+    <Pressable
+      onLongPress={onOpenActions}
+      delayLongPress={380}
+      style={[styles.msgRow, isMine && styles.msgRowMine]}
+      accessibilityHint="Удерживайте: ответить, переслать или пожаловаться"
+    >
       <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
+        {replyMeta ? (
+          <Pressable
+            onPress={() => onNavigateToReply(replyMeta.messageId)}
+            style={[styles.replyQuote, isMine ? styles.replyQuoteMine : styles.replyQuoteOther]}
+            accessibilityRole="button"
+            accessibilityLabel={`Перейти к сообщению: ${replyMeta.senderName}`}
+          >
+            <View style={[styles.replyQuoteAccent, isMine && styles.replyQuoteAccentMine]} />
+            <View style={styles.replyQuoteBody}>
+              <Text style={styles.replyQuoteName} numberOfLines={1}>
+                {replyMeta.senderName}
+              </Text>
+              <Text style={styles.replyQuotePreview} numberOfLines={2}>
+                {replyMeta.preview}
+              </Text>
+            </View>
+          </Pressable>
+        ) : null}
         {senderLine ? <Text style={styles.senderName}>{senderLine}</Text> : null}
         {attachments.map((att, idx) => {
           const url = att.url ? resolveFileUrl(att.url) : '';
@@ -207,7 +286,94 @@ function MessageBubble({
           <Text style={[styles.time, isMine && styles.timeMine]}>{time}</Text>
         ) : null}
       </View>
-    </View>
+    </Pressable>
+  );
+}
+
+function ForwardChatPickerModal({
+  visible,
+  currentChatId,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  currentChatId: string;
+  onClose: () => void;
+  onSelect: (targetChatId: string, title: string) => void;
+}) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
+  const insets = useSafeAreaInsets();
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState('');
+
+  useEffect(() => {
+    if (!visible) return;
+    setQ('');
+    setLoading(true);
+    fetchChats({ page_size: 100 })
+      .then((res) => setChats(res.results ?? []))
+      .catch(() => setChats([]))
+      .finally(() => setLoading(false));
+  }, [visible]);
+
+  const cur = normId(currentChatId).toLowerCase();
+  const filtered = chats.filter((c) => {
+    const id = normId(String(c._id ?? '')).toLowerCase();
+    if (id === cur || id.replace(/^chat_/, '') === cur.replace(/^chat_/, '')) return false;
+    if (!q.trim()) return true;
+    const name = String(c.name ?? '').toLowerCase();
+    return name.includes(q.trim().toLowerCase());
+  });
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.forwardRoot, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
+        <View style={styles.forwardHeader}>
+          <Text style={styles.forwardTitle}>Переслать в чат</Text>
+          <Pressable onPress={onClose} hitSlop={12} accessibilityLabel="Закрыть">
+            <Text style={styles.forwardClose}>Закрыть</Text>
+          </Pressable>
+        </View>
+        <TextInput
+          style={styles.forwardSearch}
+          placeholder="Поиск…"
+          placeholderTextColor={colors.muted}
+          value={q}
+          onChangeText={setQ}
+        />
+        {loading ? (
+          <View style={styles.forwardCenter}>
+            <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        ) : (
+          <FlatList
+            style={{ flex: 1 }}
+            data={filtered}
+            keyExtractor={(c, i) => String(c._id ?? `fc-${i}`)}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.forwardList}
+            renderItem={({ item }) => (
+              <Pressable
+                style={styles.forwardRow}
+                onPress={() => onSelect(String(item._id ?? ''), String(item.name ?? 'Чат'))}
+              >
+                <Text style={styles.forwardRowName} numberOfLines={2}>
+                  {String(item.name ?? 'Чат')}
+                </Text>
+                <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.forwardEmpty}>
+                {q.trim() ? 'Ничего не найдено' : 'Нет других чатов для пересылки'}
+              </Text>
+            }
+          />
+        )}
+      </View>
+    </Modal>
   );
 }
 
@@ -222,6 +388,8 @@ function AttachmentPreviewModal({
   authHeaders: Record<string, string>;
   onClose: () => void;
 }) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
 
@@ -232,6 +400,14 @@ function AttachmentPreviewModal({
   const url = attachment?.url ? resolveFileUrl(attachment.url) : '';
   const isImage = attachment ? isImageAttachment(attachment) : false;
   const title = attachment?.name || (isImage ? 'Изображение' : 'Файл');
+
+  /** Нативное «Поделиться» поверх прозрачного Modal на Android ломает касания — сначала закрываем окно. */
+  async function waitForModalDismissed() {
+    await new Promise<void>((resolve) => {
+      InteractionManager.runAfterInteractions(() => resolve());
+    });
+    await new Promise<void>((r) => setTimeout(r, Platform.OS === 'android' ? 80 : 32));
+  }
 
   async function onDownload() {
     if (!attachment) return;
@@ -253,6 +429,8 @@ function AttachmentPreviewModal({
       }
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
+        onClose();
+        await waitForModalDismissed();
         await Sharing.shareAsync(local, {
           mimeType: attachment.type || undefined,
           dialogTitle: 'Сохранить файл',
@@ -283,6 +461,8 @@ function AttachmentPreviewModal({
         Alert.alert('Недоступно', 'На этом устройстве нет окна «Поделиться».');
         return;
       }
+      onClose();
+      await waitForModalDismissed();
       await Sharing.shareAsync(local, {
         mimeType: attachment.type || undefined,
         dialogTitle: 'Поделиться',
@@ -307,8 +487,9 @@ function AttachmentPreviewModal({
       animationType="fade"
       onRequestClose={onClose}
       statusBarTranslucent
+      hardwareAccelerated
     >
-      <View style={styles.modalRoot}>
+      <View style={styles.modalRoot} collapsable={false}>
         <Pressable style={styles.modalBackdrop} onPress={onClose} accessibilityLabel="Закрыть" />
         <View
           style={[styles.modalCenter, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8 }]}
@@ -379,6 +560,8 @@ function AttachmentPreviewModal({
 }
 
 export default function ChatRoomScreen({ route, navigation }: Props) {
+  const { colors, radii } = useTheme();
+  const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const { chatId } = route.params;
   const { user } = useAuth();
   const senderId = String(user?.user_id ?? user?._uid ?? '');
@@ -394,14 +577,41 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
   const [initialLoad, setInitialLoad] = useState(true);
   const [initialPositioned, setInitialPositioned] = useState(false);
+  /** Ответ на сообщение (как в Telegram) */
+  const [replyDraft, setReplyDraft] = useState<ReplyDraft | null>(null);
+  const [forwardModalVisible, setForwardModalVisible] = useState(false);
+  const [forwardTarget, setForwardTarget] = useState<ChatMessage | null>(null);
+  const [attachMenuVisible, setAttachMenuVisible] = useState(false);
   const senderFetchDone = useRef<Set<string>>(new Set());
-  const listRef = useRef<FlatList>(null);
+  const listRef = useRef<FlatList<ChatMessage>>(null);
   const autoStickToBottom = useRef(false);
+  const scrollAfterLatestRef = useRef(false);
   const autoStickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hadPrefetched = useRef(false);
+  /** Актуальный список для снятия фокуса: в cleanup нет свежего state. */
+  const messagesRef = useRef<ChatMessage[]>([]);
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
+  /** Android: KAV с padding часто не поднимает инпут; отступ по высоте клавиатуры. iOS — через KAV ниже. */
+  const [keyboardBottomInset, setKeyboardBottomInset] = useState(0);
 
   const showGroupSender = chatType === 'group' || chatType === 'task';
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const onShow = (e: KeyboardEvent) => setKeyboardBottomInset(e.endCoordinates.height);
+    const onHide = () => setKeyboardBottomInset(0);
+    const subShow = Keyboard.addListener('keyboardDidShow', onShow);
+    const subHide = Keyboard.addListener('keyboardDidHide', onHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     getAccessToken().then((t) => {
@@ -418,11 +628,41 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     setNextCursor(cursorFromUrl(res.next ?? null));
   }, [chatId]);
 
+  const refreshLatestMessages = useCallback(async () => {
+    try {
+      const res = await fetchMessages(chatId, { page_size: 50, ordering: '-created_at' });
+      const latest = res.results ?? [];
+      setMessages((prev) => {
+        const prevLast = prev.length ? messageTimeMs(prev[prev.length - 1]) : 0;
+        const next = mergeLatestMessagePage(prev, latest);
+        const nextLast = next.length ? messageTimeMs(next[next.length - 1]) : 0;
+        scrollAfterLatestRef.current = nextLast > prevLast && autoStickToBottom.current;
+        return next;
+      });
+      requestAnimationFrame(() => {
+        if (scrollAfterLatestRef.current) {
+          scrollAfterLatestRef.current = false;
+          listRef.current?.scrollToEnd({ animated: true });
+        }
+      });
+      const tailAsc = sortMessagesAsc(latest);
+      const last = tailAsc[tailAsc.length - 1];
+      if (last && messageTimeMs(last) > 0) {
+        markChatLocallyRead(chatId, messageTimeMs(last));
+      }
+    } catch {
+      /* следующий тик / фокус */
+    }
+  }, [chatId]);
+
   useEffect(() => {
     setInitialLoad(true);
     setInitialPositioned(false);
     setMessages([]);
     setNextCursor(null);
+    setReplyDraft(null);
+    setForwardModalVisible(false);
+    setForwardTarget(null);
     autoStickToBottom.current = true;
     if (autoStickTimer.current) clearTimeout(autoStickTimer.current);
     autoStickTimer.current = setTimeout(() => {
@@ -468,6 +708,44 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       cancelled = true;
     };
   }, [chatId, load]);
+
+  useEffect(() => {
+    if (initialLoad) return;
+    const id = setInterval(() => {
+      void refreshLatestMessages();
+    }, CHAT_POLL_MS);
+    return () => clearInterval(id);
+  }, [initialLoad, chatId, refreshLatestMessages]);
+
+  useEffect(() => {
+    if (initialLoad) return;
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refreshLatestMessages();
+    });
+    return () => sub.remove();
+  }, [initialLoad, chatId, refreshLatestMessages]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (initialLoad) return;
+      void refreshLatestMessages();
+    }, [initialLoad, refreshLatestMessages])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        let maxT = 0;
+        for (const m of messagesRef.current) {
+          const t = messageTimeMs(m);
+          if (t > maxT) maxT = t;
+        }
+        const now = Date.now();
+        markChatLocallyRead(chatId, maxT > 0 ? Math.max(maxT, now) : now);
+        markChatRead(chatId).catch(() => {});
+      };
+    }, [chatId])
+  );
 
   useEffect(() => {
     senderFetchDone.current.clear();
@@ -544,12 +822,13 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     }
   }
 
+  function closeAttachMenu() {
+    setAttachMenuVisible(false);
+  }
+
+  /** Alert на Android даёт максимум 3 кнопки — «Файл» пропадал. Своё меню — все варианты на любой ОС. */
   function openAttachMenu() {
-    Alert.alert('Прикрепить', 'Выберите тип вложения', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Фото', onPress: () => pickImage() },
-      { text: 'Файл', onPress: () => pickFile() },
-    ]);
+    setAttachMenuVisible(true);
   }
 
   async function pickImage() {
@@ -586,8 +865,12 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     });
   }
 
-  async function onSend() {
-    if (!text.trim() && !pending) return;
+  /**
+   * Отправка сообщения. `attachmentOverride` — снимок с камеры без записи в pending.
+   */
+  async function submitOutgoingMessage(attachmentOverride?: PendingAttachment) {
+    const att = attachmentOverride ?? pending;
+    if (!text.trim() && !att) return;
     if (!senderId) {
       Alert.alert('Профиль', 'В профиле нет идентификатора пользователя (user_id).');
       return;
@@ -595,22 +878,26 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     setSending(true);
     try {
       const attachmentIds: string[] = [];
-      if (pending) {
-        const up = await uploadFile(pending.uri, pending.name, pending.mime);
+      if (att) {
+        const up = await uploadFile(att.uri, att.name, att.mime);
         attachmentIds.push(up.id);
       }
-      const isImgPending = pending?.mime.startsWith('image/');
+      const isImgAtt = att?.mime.startsWith('image/');
       const body: Record<string, unknown> = {
         sender_id: senderId,
         content:
           text.trim() ||
-          (attachmentIds.length ? (isImgPending ? 'Фото' : 'Файл') : '.'),
+          (attachmentIds.length ? (isImgAtt ? 'Фото' : 'Файл') : '.'),
       };
       if (attachmentIds.length) body.attachments = attachmentIds;
+      if (replyDraft) {
+        body.reply_to = replyDraft.messageId;
+      }
 
       await sendMessage(chatId, body);
       setText('');
       setPending(null);
+      setReplyDraft(null);
       await load();
       requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
     } catch (e) {
@@ -626,6 +913,183 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     }
   }
 
+  async function takePhoto() {
+    if (sending) return;
+    if (!senderId) {
+      Alert.alert('Профиль', 'В профиле нет идентификатора пользователя (user_id).');
+      return;
+    }
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Нет доступа', 'Разрешите доступ к камере в настройках устройства.');
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.85,
+        allowsEditing: false,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const a = res.assets[0];
+      await submitOutgoingMessage({
+        uri: a.uri,
+        name: a.fileName || 'photo.jpg',
+        mime: a.mimeType || 'image/jpeg',
+      });
+    } catch (e) {
+      const msg =
+        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
+      Alert.alert('Камера', msg);
+    }
+  }
+
+  const scrollToMessageById = useCallback(
+    (rawId: string) => {
+      const target = normId(rawId).toLowerCase();
+      const idx = messages.findIndex((m) => {
+        const id = normId(getMessageId(m)).toLowerCase();
+        return (
+          id === target ||
+          id.replace(/^msg_/, '') === target.replace(/^msg_/, '') ||
+          id.endsWith(target) ||
+          target.endsWith(id)
+        );
+      });
+      if (idx < 0) {
+        Alert.alert(
+          'Сообщение не найдено',
+          'Оно может быть выше загруженной истории — нажмите «Ранние сообщения» и попробуйте снова.'
+        );
+        return;
+      }
+      try {
+        listRef.current?.scrollToIndex({
+          index: idx,
+          animated: true,
+          viewPosition: 0.35,
+        });
+      } catch {
+        Alert.alert('Не удалось прокрутить', 'Попробуйте пролистать вручную.');
+      }
+    },
+    [messages]
+  );
+
+  async function submitMessageReport(messageId: string) {
+    try {
+      await apiFetch(
+        `/api/chats/${chatPathId(chatId)}/messages/${encodeURIComponent(messageId)}/report/`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ message_id: messageId }),
+        }
+      );
+    } catch {
+      /* эндпоинт может быть не развёрнут на бэкенде */
+    }
+    Alert.alert('Спасибо', 'Ваша жалоба принята к рассмотрению.');
+  }
+
+  const openMessageActions = useCallback(
+    (item: ChatMessage) => {
+      const runReply = () => {
+        const d = buildReplyDraftFromMessage(item, senderNames);
+        if (d) setReplyDraft(d);
+      };
+      const runForward = () => {
+        setForwardTarget(item);
+        setForwardModalVisible(true);
+      };
+      const runReport = () => {
+        const mid = getMessageId(item);
+        if (!mid) return;
+        Alert.alert(
+          'Пожаловаться',
+          'Отправить жалобу на это сообщение? Его увидят модераторы.',
+          [
+            { text: 'Отмена', style: 'cancel' },
+            {
+              text: 'Пожаловаться',
+              style: 'destructive',
+              onPress: () => {
+                void submitMessageReport(mid);
+              },
+            },
+          ]
+        );
+      };
+
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: 'Сообщение',
+            options: ['Отмена', 'Ответить', 'Переслать', 'Пожаловаться'],
+            cancelButtonIndex: 0,
+            destructiveButtonIndex: 3,
+          },
+          (buttonIndex) => {
+            if (buttonIndex === 1) runReply();
+            else if (buttonIndex === 2) runForward();
+            else if (buttonIndex === 3) runReport();
+          }
+        );
+      } else {
+        Alert.alert('Сообщение', 'Выберите действие', [
+          { text: 'Отмена', style: 'cancel' },
+          { text: 'Ответить', onPress: runReply },
+          { text: 'Переслать', onPress: runForward },
+          { text: 'Пожаловаться', style: 'destructive', onPress: runReport },
+        ]);
+      }
+    },
+    [senderNames, chatId]
+  );
+
+  function closeForwardModal() {
+    setForwardModalVisible(false);
+    setForwardTarget(null);
+  }
+
+  async function onForwardPickChat(targetChatId: string, targetTitle: string) {
+    const src = forwardTarget;
+    if (!src || !senderId) {
+      closeForwardModal();
+      return;
+    }
+    setForwardModalVisible(false);
+    setSending(true);
+    try {
+      const fromTitle = route.params.title ?? 'Чат';
+      const { content } = buildForwardContent(src, senderNames, fromTitle);
+      const body: Record<string, unknown> = { sender_id: senderId, content };
+      const ids = extractAttachmentIdsFromMessage(src);
+      if (ids.length) body.attachments = ids;
+      await sendMessage(targetChatId, body);
+      setForwardTarget(null);
+      Alert.alert('Готово', `Сообщение переслано в «${targetTitle}».`, [
+        { text: 'ОК' },
+        {
+          text: 'Открыть чат',
+          onPress: () =>
+            navigation.navigate('ChatRoom', { chatId: targetChatId, title: targetTitle }),
+        },
+      ]);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
+      Alert.alert('Не удалось переслать', msg);
+      setForwardTarget(src);
+      setForwardModalVisible(true);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function onSend() {
+    await submitOutgoingMessage(undefined);
+  }
+
   function onInputKeyPress(e: { nativeEvent: { key: string; shiftKey?: boolean } }) {
     if (e.nativeEvent.key !== 'Enter') return;
     if (e.nativeEvent.shiftKey) return;
@@ -633,10 +1097,19 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   }
 
   return (
+    <View
+      style={[
+        styles.root,
+        Platform.OS === 'android' && keyboardBottomInset > 0
+          ? { paddingBottom: keyboardBottomInset }
+          : null,
+      ]}
+    >
     <KeyboardAvoidingView
-      style={styles.root}
-      behavior="padding"
-      keyboardVerticalOffset={Platform.select({ ios: 86, android: 0, default: 0 })}
+      style={styles.keyboardFlex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      enabled={Platform.OS === 'ios'}
+      keyboardVerticalOffset={headerHeight}
     >
       <AttachmentPreviewModal
         visible={previewAtt !== null}
@@ -644,6 +1117,63 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
         authHeaders={authHeaders}
         onClose={() => setPreviewAtt(null)}
       />
+      <ForwardChatPickerModal
+        visible={forwardModalVisible}
+        currentChatId={chatId}
+        onClose={closeForwardModal}
+        onSelect={onForwardPickChat}
+      />
+
+      <Modal
+        visible={attachMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAttachMenu}
+        statusBarTranslucent
+      >
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={closeAttachMenu} accessibilityLabel="Закрыть" />
+          <View style={styles.attachMenuWrap} pointerEvents="box-none">
+            <View style={[styles.attachMenuCard, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
+              <Text style={styles.attachMenuTitle}>Прикрепить</Text>
+              <Text style={styles.attachMenuSubtitle}>Выберите тип вложения</Text>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  closeAttachMenu();
+                  void takePhoto();
+                }}
+              >
+                <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Сделать фото</Text>
+              </Pressable>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  closeAttachMenu();
+                  void pickImage();
+                }}
+              >
+                <Ionicons name="images-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Фото из галереи</Text>
+              </Pressable>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  closeAttachMenu();
+                  void pickFile();
+                }}
+              >
+                <Ionicons name="document-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Файл</Text>
+              </Pressable>
+              <Pressable style={styles.attachMenuCancel} onPress={closeAttachMenu}>
+                <Text style={styles.attachMenuCancelText}>Отмена</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {!initialLoad && nextCursor ? (
         <Pressable style={styles.moreBar} onPress={loadOlder} disabled={loadingOlder}>
@@ -660,6 +1190,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       ) : (
         <FlatList
           ref={listRef}
+          keyboardShouldPersistTaps="handled"
           data={messages}
           keyExtractor={(m, i) => {
             const id = String((m as Record<string, unknown>)._id ?? '').trim();
@@ -681,8 +1212,24 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
               setInitialPositioned(true);
             });
           }}
+          onScrollToIndexFailed={({ index, averageItemLength }) => {
+            const offset = Math.max(0, index * (averageItemLength || 80));
+            listRef.current?.scrollToOffset({ offset, animated: true });
+            setTimeout(() => {
+              try {
+                listRef.current?.scrollToIndex({
+                  index,
+                  animated: true,
+                  viewPosition: 0.35,
+                });
+              } catch {
+                /* ignore */
+              }
+            }, 120);
+          }}
           renderItem={({ item }) => {
             const sid = normId(String(item.sender_id ?? ''));
+            const replyMeta = extractReplyMeta(item, senderNames);
             return (
               <MessageBubble
                 item={item}
@@ -691,6 +1238,9 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
                 onOpenAttachment={setPreviewAtt}
                 showGroupSender={showGroupSender}
                 resolvedSenderName={senderNames[sid] ?? ''}
+                replyMeta={replyMeta}
+                onOpenActions={() => openMessageActions(item)}
+                onNavigateToReply={scrollToMessageById}
               />
             );
           }}
@@ -714,14 +1264,41 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           </Pressable>
         </View>
       ) : null}
-      <View style={[styles.footer, { paddingBottom: 8 + insets.bottom }]}>
+      {replyDraft ? (
+        <View style={styles.replyComposerBar}>
+          <View style={styles.replyComposerAccent} />
+          <Pressable
+            style={styles.replyComposerBody}
+            onPress={() => scrollToMessageById(replyDraft.messageId)}
+            accessibilityRole="button"
+            accessibilityLabel="Перейти к цитируемому сообщению"
+          >
+            <Text style={styles.replyComposerLabel}>Ответ на</Text>
+            <Text style={styles.replyComposerName} numberOfLines={1}>
+              {replyDraft.senderName}
+            </Text>
+            <Text style={styles.replyComposerPreview} numberOfLines={2}>
+              {replyDraft.preview}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setReplyDraft(null)}
+            hitSlop={10}
+            accessibilityLabel="Отменить ответ"
+            style={styles.replyComposerClose}
+          >
+            <Ionicons name="close" size={24} color={colors.muted} />
+          </Pressable>
+        </View>
+      ) : null}
+      <View style={[styles.footer, { paddingBottom: Math.max(10, insets.bottom) }]}>
         <Pressable
           style={styles.attachBtn}
           onPress={openAttachMenu}
           disabled={sending}
           accessibilityLabel="Прикрепить файл или фото"
         >
-          <Ionicons name="attach-outline" size={28} color={colors.primary} />
+          <Ionicons name="attach-outline" size={26} color={colors.primary} />
         </Pressable>
         <TextInput
           style={styles.input}
@@ -734,6 +1311,8 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           onSubmitEditing={onSend}
           blurOnSubmit={false}
           onKeyPress={onInputKeyPress}
+          underlineColorAndroid="transparent"
+          {...(Platform.OS === 'android' ? { textAlignVertical: 'center' } : {})}
         />
         <Pressable
           style={[styles.sendBtn, sending && styles.sendBtnDisabled]}
@@ -748,11 +1327,16 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
         </Pressable>
       </View>
     </KeyboardAvoidingView>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createChatRoomStyles(colors: ThemeColors, radii: ThemeRadii) {
+  return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  keyboardFlex: { flex: 1 },
   listLoader: {
     flex: 1,
     justifyContent: 'center',
@@ -883,6 +1467,45 @@ const styles = StyleSheet.create({
   msgRowMine: {
     justifyContent: 'flex-end',
   },
+  /** Мини-блок «ответ на…» внутри пузыря (как в Telegram) */
+  replyQuote: {
+    flexDirection: 'row',
+    borderRadius: radii.sm,
+    overflow: 'hidden',
+    marginBottom: 8,
+    maxWidth: '100%',
+  },
+  replyQuoteMine: {
+    backgroundColor: 'rgba(255,255,255,0.45)',
+  },
+  replyQuoteOther: {
+    backgroundColor: colors.chip,
+  },
+  replyQuoteAccent: {
+    width: 3,
+    backgroundColor: colors.primary,
+    borderRadius: 2,
+  },
+  replyQuoteAccentMine: {
+    backgroundColor: colors.link,
+  },
+  replyQuoteBody: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    minWidth: 0,
+  },
+  replyQuoteName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  replyQuotePreview: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.muted,
+  },
   bubble: {
     maxWidth: '82%',
     paddingHorizontal: 12,
@@ -919,7 +1542,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   msgLinkMine: {
-    color: '#1d4ed8',
+    color: colors.primary,
   },
   time: {
     fontSize: 10,
@@ -928,8 +1551,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   timeMine: {
-    color: colors.primary,
-    opacity: 0.85,
+    color: colors.muted,
   },
   imgWrap: {
     borderRadius: radii.sm,
@@ -981,27 +1603,90 @@ const styles = StyleSheet.create({
   },
   pendingTxt: { flex: 1, color: colors.muted, fontSize: 14 },
   fileChipIcon: { marginRight: 8 },
+  replyComposerBar: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    paddingVertical: 8,
+    paddingLeft: 10,
+    paddingRight: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.bgMuted,
+  },
+  replyComposerAccent: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.primary,
+    marginRight: 8,
+    alignSelf: 'stretch',
+  },
+  replyComposerBody: {
+    flex: 1,
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingRight: 4,
+  },
+  replyComposerLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  replyComposerName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  replyComposerPreview: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
+  },
+  replyComposerClose: {
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
   footer: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    borderTopWidth: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     backgroundColor: colors.card,
+    gap: 2,
   },
+  /** Одна высота с полем ввода — без «плавающих» margin */
   attachBtn: {
-    padding: 8,
-    marginBottom: 2,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   input: {
     flex: 1,
+    minHeight: 44,
     maxHeight: 120,
     color: colors.text,
     paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 16,
+    ...Platform.select({
+      ios: {
+        paddingTop: 10,
+        paddingBottom: 10,
+      },
+      android: {
+        paddingVertical: 10,
+        paddingHorizontal: 8,
+      },
+      default: {
+        paddingVertical: 10,
+      },
+    }),
+    fontSize: 17,
+    lineHeight: 22,
   },
   sendBtn: {
     backgroundColor: colors.primary,
@@ -1010,8 +1695,120 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 4,
-    marginBottom: 2,
   },
   sendBtnDisabled: { opacity: 0.7 },
-});
+  forwardRoot: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 16,
+  },
+  forwardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  forwardTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  forwardClose: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  forwardSearch: {
+    backgroundColor: colors.card,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 17,
+    color: colors.text,
+    marginBottom: 12,
+  },
+  forwardCenter: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  forwardList: { paddingBottom: 24 },
+  forwardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  forwardRowName: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '600',
+    color: colors.text,
+    paddingRight: 8,
+  },
+  forwardEmpty: {
+    textAlign: 'center',
+    color: colors.muted,
+    marginTop: 32,
+    fontSize: 16,
+  },
+  attachMenuWrap: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  attachMenuCard: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderBottomWidth: 0,
+    paddingTop: 14,
+  },
+  attachMenuTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    paddingHorizontal: 18,
+  },
+  attachMenuSubtitle: {
+    fontSize: 14,
+    color: colors.muted,
+    paddingHorizontal: 18,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  attachMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  attachMenuRowText: {
+    fontSize: 17,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  attachMenuCancel: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    marginTop: 4,
+  },
+  attachMenuCancelText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  });
+}

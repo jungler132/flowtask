@@ -1,17 +1,32 @@
 import { Ionicons } from '@expo/vector-icons';
-import { DefaultTheme, NavigationContainer } from '@react-navigation/native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+} from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  AppState,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { fetchChats } from '../api/chatsApi';
 import { fetchTasksPage } from '../api/tasksApi';
 import { AuthProvider, useAuth } from '../context/AuthContext';
-import { applyLocalReadToChats, hydrateLocalReadChats } from '../lib/chatUnread';
-import { colors } from '../theme';
+import { ThemeProvider, useTheme } from '../context/ThemeContext';
+import {
+  applyLocalReadToChats,
+  hydrateLocalReadChats,
+  unreadCountNumber,
+} from '../lib/chatUnread';
 import {
   AuthStackParamList,
   ChatsStackParamList,
@@ -41,19 +56,6 @@ import NewsScreen from '../screens/NewsScreen';
 import { PushNotificationRoot } from '../components/PushNotificationRoot';
 import { rootNavigationRef } from './rootNavigationRef';
 
-const navTheme = {
-  ...DefaultTheme,
-  colors: {
-    ...DefaultTheme.colors,
-    primary: colors.primary,
-    background: colors.bg,
-    card: colors.card,
-    text: colors.text,
-    border: colors.border,
-    notification: colors.primary,
-  },
-};
-
 const tabIconNames = {
   Chats: 'chatbubbles-outline',
   Tasks: 'checkbox-outline',
@@ -61,18 +63,38 @@ const tabIconNames = {
   Profile: 'person-circle-outline',
 } as const satisfies Record<string, keyof typeof Ionicons.glyphMap>;
 
-const stackScreenOptions = {
-  headerStyle: {
-    backgroundColor: colors.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  headerTintColor: colors.text,
-  headerTitleStyle: { fontWeight: '600' as const, fontSize: 17 },
-  cardStyle: { backgroundColor: colors.bg },
-};
+/** Подпись вкладки: до 2 строк, поджим шрифта — чтобы на узких экранах не резало текст. */
+function BottomTabBarLabel({
+  color,
+  text,
+  maxWidth,
+  fontSize,
+}: {
+  color: string;
+  text: string;
+  maxWidth: number;
+  fontSize: number;
+}) {
+  return (
+    <Text
+      numberOfLines={2}
+      ellipsizeMode="tail"
+      adjustsFontSizeToFit
+      minimumFontScale={0.72}
+      style={{
+        color,
+        fontSize,
+        fontWeight: '600',
+        textAlign: 'center',
+        lineHeight: Math.round(fontSize * 1.2),
+        maxWidth,
+        alignSelf: 'center',
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
 
 const RootStack = createStackNavigator();
 const AuthStack = createStackNavigator<AuthStackParamList>();
@@ -81,7 +103,32 @@ const ChatsStack = createStackNavigator<ChatsStackParamList>();
 const ProfileStack = createStackNavigator<ProfileStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+function useStackScreenOptions() {
+  const { colors } = useTheme();
+  return useMemo(
+    () => ({
+      headerStyle: {
+        backgroundColor: colors.card,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: colors.border,
+        elevation: 0,
+        shadowOpacity: 0,
+      },
+      headerTintColor: colors.text,
+      headerTitleStyle: {
+        fontWeight: '700' as const,
+        fontSize: 18,
+        letterSpacing: 0,
+        color: colors.text,
+      },
+      cardStyle: { backgroundColor: colors.bg },
+    }),
+    [colors],
+  );
+}
+
 function TasksNavigator() {
+  const stackScreenOptions = useStackScreenOptions();
   return (
     <TasksStack.Navigator
       detachInactiveScreens={false}
@@ -100,6 +147,7 @@ function TasksNavigator() {
 }
 
 function ProfileNavigator() {
+  const stackScreenOptions = useStackScreenOptions();
   return (
     <ProfileStack.Navigator detachInactiveScreens={false} screenOptions={stackScreenOptions}>
       <ProfileStack.Screen name="ProfileMain" component={ProfileScreen} options={{ title: 'Профиль' }} />
@@ -113,6 +161,7 @@ function ProfileNavigator() {
 }
 
 function ChatsNavigator() {
+  const stackScreenOptions = useStackScreenOptions();
   return (
     <ChatsStack.Navigator
       detachInactiveScreens={false}
@@ -129,6 +178,20 @@ function ChatsNavigator() {
 }
 
 function MainTabs() {
+  const { colors } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const tabBarMetrics = useMemo(() => {
+    const tabCount = 4;
+    const slot = windowWidth / tabCount;
+    const labelMaxWidth = Math.max(48, Math.floor(slot) - 10);
+    const fontSize =
+      slot < 72 ? 9 : slot < 80 ? 10 : slot < 92 ? 11 : slot < 108 ? 12 : 13;
+    const iconSize =
+      slot < 72 ? 20 : slot < 80 ? 22 : slot < 92 ? 24 : slot < 108 ? 26 : 28;
+    const tabBarMinHeight = slot < 88 ? 56 : 52;
+    return { labelMaxWidth, fontSize, iconSize, tabBarMinHeight };
+  }, [windowWidth]);
+
   const [chatBadge, setChatBadge] = useState<number>(0);
   const [taskBadge, setTaskBadge] = useState<number>(0);
 
@@ -139,10 +202,10 @@ function MainTabs() {
         await hydrateLocalReadChats();
         const chatRes = await fetchChats({ page_size: 100 });
         const normalizedChats = applyLocalReadToChats(chatRes.results ?? []);
-        const unreadChats = normalizedChats.reduce((sum, chat) => {
-          const n = Number(chat.unread_count ?? 0);
-          return Number.isFinite(n) ? sum + Math.max(0, n) : sum;
-        }, 0);
+        const unreadChats = normalizedChats.reduce(
+          (sum, chat) => sum + unreadCountNumber(chat.unread_count),
+          0
+        );
         if (mounted) setChatBadge(unreadChats);
       } catch {
         if (mounted) setChatBadge(0);
@@ -160,10 +223,14 @@ function MainTabs() {
     refreshBadges().catch(() => {});
     const timer = setInterval(() => {
       refreshBadges().catch(() => {});
-    }, 30000);
+    }, 8000);
+    const appSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshBadges().catch(() => {});
+    });
     return () => {
       mounted = false;
       clearInterval(timer);
+      appSub.remove();
     };
   }, []);
 
@@ -175,25 +242,33 @@ function MainTabs() {
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
+        tabBarShowLabel: true,
+        tabBarItemStyle: {
+          flex: 1,
+          minWidth: 0,
+          paddingHorizontal: 2,
         },
-        /**
-         * Не задавать height/paddingBottom: они перебивают расчёт React Navigation
-         * и нижний system inset (жестовая полоска / кнопки Android).
-         */
+        tabBarLabel: ({ color, children }) => (
+          <BottomTabBarLabel
+            color={color}
+            text={typeof children === 'string' ? children : String(children ?? '')}
+            maxWidth={tabBarMetrics.labelMaxWidth}
+            fontSize={tabBarMetrics.fontSize}
+          />
+        ),
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
           borderTopWidth: 1,
           elevation: 0,
           shadowOpacity: 0,
+          minHeight: tabBarMetrics.tabBarMinHeight,
         },
-        tabBarIcon: ({ color, size }) => {
+        tabBarIconStyle: { marginTop: 2 },
+        tabBarIcon: ({ color }) => {
           const name =
             tabIconNames[route.name as keyof typeof tabIconNames] ?? 'ellipse-outline';
-          return <Ionicons name={name} size={size ?? 26} color={color} />;
+          return <Ionicons name={name} size={tabBarMetrics.iconSize} color={color} />;
         },
       })}
     >
@@ -242,6 +317,7 @@ function MainTabs() {
 }
 
 function AuthNavigator() {
+  const stackScreenOptions = useStackScreenOptions();
   return (
     <AuthStack.Navigator detachInactiveScreens={false} screenOptions={stackScreenOptions}>
       <AuthStack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
@@ -251,11 +327,12 @@ function AuthNavigator() {
 }
 
 function RootNavigator() {
+  const { colors } = useTheme();
   const { user, loading, ready } = useAuth();
 
   if (!ready || loading) {
     return (
-      <View style={styles.splash}>
+      <View style={[splashStyles.splash, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
@@ -272,17 +349,52 @@ function RootNavigator() {
   );
 }
 
+const splashStyles = StyleSheet.create({
+  splash: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+
+function AppNavigation() {
+  const { colors, isDark } = useTheme();
+  const navTheme = useMemo(() => {
+    const base = isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        primary: colors.primary,
+        background: colors.bg,
+        card: colors.card,
+        text: colors.text,
+        border: colors.border,
+        notification: colors.primary,
+      },
+    };
+  }, [colors, isDark]);
+
+  return (
+    <>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <NavigationContainer ref={rootNavigationRef} theme={navTheme}>
+        <RootNavigator />
+        <PushNotificationRoot />
+      </NavigationContainer>
+    </>
+  );
+}
+
 export default function AppNavigator() {
   return (
     <GestureHandlerRootView style={styles.flex}>
       <SafeAreaProvider>
-        <AuthProvider>
-          <StatusBar style="dark" backgroundColor={colors.bg} />
-          <NavigationContainer ref={rootNavigationRef} theme={navTheme}>
-            <RootNavigator />
-            <PushNotificationRoot />
-          </NavigationContainer>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <AppNavigation />
+          </AuthProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -290,10 +402,4 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  splash: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 });

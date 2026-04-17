@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { ViewStyle } from 'react-native';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { ApiError, formatApiErrorForUser } from '../../api/client';
 import {
@@ -22,7 +23,8 @@ import {
 } from '../../api/chatsApi';
 import { resolveParticipantIdsForChatApi } from '../../api/usersApi';
 import { ChatsStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 import TaskPickerModal, { type PickedTask } from './TaskPickerModal';
 import UserInvitePickerModal, { type PickedUser } from './UserInvitePickerModal';
 import { sameParticipantId } from './participantIdUtils';
@@ -61,6 +63,8 @@ function parseIdTokens(s: string): string[] {
 }
 
 export default function ChatCreateScreen({ navigation }: Props) {
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(() => createChatCreateStyles(colors, radii, shadowCard), [colors, radii, shadowCard]);
   const tabScrollBottom = useTabScrollBottomPadding();
   const [type, setType] = useState<ChatType>('group');
   const [name, setName] = useState('');
@@ -415,7 +419,11 @@ export default function ChatCreateScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createChatCreateStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+
   root: { flex: 1, backgroundColor: colors.bg },
   scrollContent: { padding: 16, paddingBottom: 40 },
   lead: {
@@ -541,4 +549,7 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.6 },
   btnText: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
-});
+  });
+}
+
+

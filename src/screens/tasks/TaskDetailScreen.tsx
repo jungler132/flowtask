@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import type { ViewStyle } from 'react-native';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { fetchAllDepartmentsCached } from '../../api/departmentsApi';
 import { formatApiErrorForUser } from '../../api/client';
@@ -21,8 +22,9 @@ import {
 } from '../../api/chatsApi';
 import { deleteTask, fetchTask, Task, taskPickerTitle } from '../../api/tasksApi';
 import { fetchAllUsersCached } from '../../api/usersApi';
+import { useTheme } from '../../context/ThemeContext';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import type { ThemeColors } from '../../theme';
 import {
   buildDepartmentLookup,
   buildUserDisplayLookup,
@@ -55,6 +57,11 @@ const emptyResolved: Resolved = {
 };
 
 function Field({ label, value, icon }: { label: string; value: string; icon?: keyof typeof Ionicons.glyphMap }) {
+  const { colors, layout, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTaskDetailStyles(colors, layout, radii, shadowCard),
+    [colors, layout, radii, shadowCard],
+  );
   const show = value?.trim();
   return (
     <View style={styles.field}>
@@ -68,6 +75,8 @@ function Field({ label, value, icon }: { label: string; value: string; icon?: ke
 }
 
 export default function TaskDetailScreen({ route, navigation }: Props) {
+  const { colors, layout, radii, shadowCard } = useTheme();
+  const styles = useMemo(() => createTaskDetailStyles(colors, layout, radii, shadowCard), [colors, layout, radii, shadowCard]);
   const tabScrollBottom = useTabScrollBottomPadding();
   const { taskId } = route.params;
   const [task, setTask] = useState<Task | null>(null);
@@ -306,6 +315,11 @@ function ActionBtn({
   onPress: () => void;
   danger?: boolean;
 }) {
+  const { colors, layout, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTaskDetailStyles(colors, layout, radii, shadowCard),
+    [colors, layout, radii, shadowCard],
+  );
   return (
     <Pressable
       style={({ pressed }) => [
@@ -317,7 +331,7 @@ function ActionBtn({
     >
       <Ionicons
         name={icon}
-        size={22}
+        size={24}
         color={danger ? colors.danger : colors.primary}
         style={styles.actionIcon}
       />
@@ -328,7 +342,12 @@ function ActionBtn({
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeLayout = (typeof import('../../theme'))['layout'];
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createTaskDetailStyles(colors: ThemeColors, layout: ThemeLayout, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+
   root: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg },
@@ -360,14 +379,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   descBlock: { marginBottom: 8 },
-  descLabel: { fontSize: 12, fontWeight: '600', color: colors.muted, marginBottom: 6 },
-  descText: { fontSize: 15, lineHeight: 22, color: colors.text },
+  descLabel: { fontSize: 14, fontWeight: '700', color: colors.muted, marginBottom: 6 },
+  descText: { fontSize: layout.fontSizeBody, lineHeight: 26, color: colors.text },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 14 },
   field: { marginBottom: 16 },
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   fieldIcon: { marginRight: 6 },
-  label: { color: colors.muted, fontSize: 12, fontWeight: '600' },
-  value: { color: colors.text, fontSize: 15, lineHeight: 22 },
+  label: { color: colors.muted, fontSize: 14, fontWeight: '600' },
+  value: { color: colors.text, fontSize: layout.fontSizeBody, lineHeight: 26 },
   actionsSectionTitle: {
     marginTop: 12,
     marginBottom: 12,
@@ -390,11 +409,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.chip,
-    paddingVertical: 14,
+    paddingVertical: 16,
     paddingHorizontal: 12,
     borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.border,
+    minHeight: layout.touchMin,
   },
   actionBtnDanger: {
     borderWidth: 1.5,
@@ -406,9 +426,12 @@ const styles = StyleSheet.create({
   actionBtnText: {
     flex: 1,
     color: colors.text,
-    fontWeight: '600',
-    fontSize: 14,
-    lineHeight: 18,
+    fontWeight: '700',
+    fontSize: 15,
+    lineHeight: 20,
   },
   actionBtnTextDanger: { color: colors.danger },
-});
+  });
+}
+
+

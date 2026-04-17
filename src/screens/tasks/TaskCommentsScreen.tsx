@@ -1,5 +1,5 @@
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -11,6 +11,7 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -22,14 +23,90 @@ import {
   updateComment,
 } from '../../api/tasksApi';
 import { fetchAllUsersCached } from '../../api/usersApi';
+import { useTheme } from '../../context/ThemeContext';
 import { TasksStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import type { ThemeColors } from '../../theme';
 import { buildUserDisplayLookup, formatSingleUserLabel } from '../../utils/entityDisplay';
 
 type Props = StackScreenProps<TasksStackParamList, 'TaskComments'>;
 
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createTaskCommentsStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.bg },
+    editBar: {
+      padding: 12,
+      backgroundColor: colors.card,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+    },
+    editLabel: { color: colors.muted, marginBottom: 6 },
+    editInput: {
+      color: colors.text,
+      backgroundColor: colors.bg,
+      borderRadius: 8,
+      padding: 10,
+      minHeight: 60,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    editActions: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginTop: 10,
+    },
+    muted: { color: colors.muted },
+    card: {
+      marginHorizontal: 16,
+      marginBottom: 10,
+      padding: 14,
+      backgroundColor: colors.card,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      ...shadowCard,
+    },
+    author: { color: colors.primary, fontWeight: '600', marginBottom: 6 },
+    content: { color: colors.text },
+    row: { flexDirection: 'row', marginTop: 10 },
+    link: { color: colors.primary },
+    danger: { color: colors.danger },
+    empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
+    footer: {
+      padding: 12,
+      borderTopWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.card,
+    },
+    input: {
+      minHeight: 44,
+      color: colors.text,
+      marginBottom: 8,
+      backgroundColor: colors.chip,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    send: {
+      backgroundColor: colors.primary,
+      padding: 12,
+      borderRadius: 8,
+      alignItems: 'center',
+    },
+    sendText: { color: colors.onPrimary, fontWeight: '600' },
+  });
+}
+
 export default function TaskCommentsScreen({ route }: Props) {
   const insets = useSafeAreaInsets();
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(
+    () => createTaskCommentsStyles(colors, radii, shadowCard),
+    [colors, radii, shadowCard],
+  );
   const { taskId } = route.params;
   const [items, setItems] = useState<TaskComment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -126,7 +203,12 @@ export default function TaskCommentsScreen({ route }: Props) {
             multiline
           />
           <View style={styles.editActions}>
-            <Pressable onPress={() => { setEditingId(null); setEditText(''); }}>
+            <Pressable
+              onPress={() => {
+                setEditingId(null);
+                setEditText('');
+              }}
+            >
               <Text style={styles.muted}>Отмена</Text>
             </Pressable>
             <Pressable style={{ marginLeft: 24 }} onPress={saveEdit}>
@@ -146,6 +228,8 @@ export default function TaskCommentsScreen({ route }: Props) {
               await load();
               setRefreshing(false);
             }}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
           />
         }
         contentContainerStyle={{ paddingBottom: 16 }}
@@ -157,18 +241,18 @@ export default function TaskCommentsScreen({ route }: Props) {
             (uid ? formatSingleUserLabel(uid, userLookup) : '') ||
             (uid || 'Участник');
           return (
-          <View style={styles.card}>
-            <Text style={styles.author}>{author}</Text>
-            <Text style={styles.content}>{String(item.content ?? '')}</Text>
-            <View style={styles.row}>
-              <Pressable onPress={() => startEdit(item)}>
-                <Text style={styles.link}>Изменить</Text>
-              </Pressable>
-              <Pressable style={{ marginLeft: 16 }} onPress={() => removeItem(item)}>
-                <Text style={styles.danger}>Удалить</Text>
-              </Pressable>
+            <View style={styles.card}>
+              <Text style={styles.author}>{author}</Text>
+              <Text style={styles.content}>{String(item.content ?? '')}</Text>
+              <View style={styles.row}>
+                <Pressable onPress={() => startEdit(item)}>
+                  <Text style={styles.link}>Изменить</Text>
+                </Pressable>
+                <Pressable style={{ marginLeft: 16 }} onPress={() => removeItem(item)}>
+                  <Text style={styles.danger}>Удалить</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
           );
         }}
         ListEmptyComponent={<Text style={styles.empty}>Нет комментариев</Text>}
@@ -189,69 +273,3 @@ export default function TaskCommentsScreen({ route }: Props) {
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  editBar: {
-    padding: 12,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-  },
-  editLabel: { color: colors.muted, marginBottom: 6 },
-  editInput: {
-    color: colors.text,
-    backgroundColor: colors.bg,
-    borderRadius: 8,
-    padding: 10,
-    minHeight: 60,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  editActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  muted: { color: colors.muted },
-  card: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    padding: 14,
-    backgroundColor: colors.card,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...shadowCard,
-  },
-  author: { color: colors.primary, fontWeight: '600', marginBottom: 6 },
-  content: { color: colors.text },
-  row: { flexDirection: 'row', marginTop: 10 },
-  link: { color: colors.primary },
-  danger: { color: colors.danger },
-  empty: { textAlign: 'center', color: colors.muted, marginTop: 40 },
-  footer: {
-    padding: 12,
-    borderTopWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  input: {
-    minHeight: 44,
-    color: colors.text,
-    marginBottom: 8,
-    backgroundColor: colors.chip,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  send: {
-    backgroundColor: colors.primary,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  sendText: { color: colors.onPrimary, fontWeight: '600' },
-});

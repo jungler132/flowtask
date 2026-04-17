@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { ViewStyle } from 'react-native';
 import { formatApiErrorForUser } from '../../api/client';
 import {
   addParticipants,
@@ -22,7 +23,8 @@ import {
 import { fetchUser, resolveParticipantIdsForChatApi } from '../../api/usersApi';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import { ChatsStackParamList } from '../../navigation/types';
-import { colors, radii, shadowCard } from '../../theme';
+import { useTheme } from '../../context/ThemeContext';
+import type { ThemeColors } from '../../theme';
 import UserInvitePickerModal from './UserInvitePickerModal';
 
 type Props = StackScreenProps<ChatsStackParamList, 'ChatManage'>;
@@ -58,6 +60,8 @@ function errMsg(e: unknown): string {
 type ProfileRow = { name: string; email?: string };
 
 export default function ChatManageScreen({ route, navigation }: Props) {
+  const { colors, radii, shadowCard } = useTheme();
+  const styles = useMemo(() => createChatManageStyles(colors, radii, shadowCard), [colors, radii, shadowCard]);
   const tabScrollBottom = useTabScrollBottomPadding();
   const { chatId } = route.params;
   const [chat, setChat] = useState<Record<string, unknown> | null>(null);
@@ -390,7 +394,11 @@ export default function ChatManageScreen({ route, navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+type ThemeRadii = (typeof import('../../theme'))['radii'];
+
+function createChatManageStyles(colors: ThemeColors, radii: ThemeRadii, shadowCard: ViewStyle) {
+  return StyleSheet.create({
+
   root: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16 },
   heroCard: {
@@ -509,4 +517,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   mono: { fontSize: 11, fontFamily: 'monospace', color: colors.muted },
-});
+  });
+}
+
+
