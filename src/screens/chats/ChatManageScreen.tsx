@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -26,6 +27,7 @@ import { ChatsStackParamList } from '../../navigation/types';
 import { useTheme } from '../../context/ThemeContext';
 import type { ThemeColors } from '../../theme';
 import UserInvitePickerModal from './UserInvitePickerModal';
+import { parseParticipantIds } from './participantIdUtils';
 
 type Props = StackScreenProps<ChatsStackParamList, 'ChatManage'>;
 
@@ -34,20 +36,6 @@ const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'group', label: 'Групповой' },
   { value: 'task', label: 'По задаче' },
 ];
-
-function parseParticipantIds(raw: unknown): string[] {
-  if (raw == null) return [];
-  if (Array.isArray(raw)) return raw.map((x) => String(x).trim()).filter(Boolean);
-  const s = String(raw).trim();
-  if (!s) return [];
-  try {
-    const j = JSON.parse(s) as unknown;
-    if (Array.isArray(j)) return j.map((x) => String(x).trim()).filter(Boolean);
-  } catch {
-    /* строка */
-  }
-  return s.split(/[,\s;]+/).map((t) => t.trim()).filter(Boolean);
-}
 
 function typeLabel(type: string): string {
   return TYPE_OPTIONS.find((o) => o.value === type)?.label ?? type;
@@ -247,19 +235,13 @@ export default function ChatManageScreen({ route, navigation }: Props) {
   const taskRef = chat?.task_id != null && String(chat.task_id).trim() !== '' ? String(chat.task_id) : null;
 
   return (
+    <>
     <ScrollView
       style={styles.root}
       contentContainerStyle={[styles.content, { paddingBottom: tabScrollBottom }]}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
     >
-      <UserInvitePickerModal
-        visible={inviteOpen}
-        onClose={() => setInviteOpen(false)}
-        excludeIds={participants}
-        primaryLabel="Добавить выбранных"
-        onApply={addFromPicker}
-        applyBusy={busy}
-      />
-
       <View style={styles.heroCard}>
         <Text style={styles.heroTitle}>{chatName}</Text>
         <View style={styles.heroRow}>
@@ -339,7 +321,10 @@ export default function ChatManageScreen({ route, navigation }: Props) {
       </Text>
       <Pressable
         style={styles.btnSecondary}
-        onPress={() => setInviteOpen(true)}
+        onPress={() => {
+          Keyboard.dismiss();
+          setInviteOpen(true);
+        }}
         disabled={busy}
       >
         <Ionicons name="people-outline" size={22} color={colors.primary} style={styles.btnIconLeft} />
@@ -391,6 +376,15 @@ export default function ChatManageScreen({ route, navigation }: Props) {
         </View>
       ) : null}
     </ScrollView>
+    <UserInvitePickerModal
+      visible={inviteOpen}
+      onClose={() => setInviteOpen(false)}
+      excludeIds={participants}
+      primaryLabel="Добавить выбранных"
+      onApply={addFromPicker}
+      applyBusy={busy}
+    />
+    </>
   );
 }
 

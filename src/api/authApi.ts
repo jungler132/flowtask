@@ -19,7 +19,19 @@ export type UserProfile = Record<string, unknown> & {
   reserve_email?: string | null;
   created_at?: string;
   updated_at?: string | null;
+  /** Нестандартизированные в ответе API — см. extractUserAvatarUrl */
+  avatar_url?: string | null;
+  avatar_id?: string | null;
 };
+
+/** PATCH /api/users/me/ — частичное обновление профиля (в т.ч. avatar_id после upload). */
+export async function patchMyProfile(body: Record<string, unknown>): Promise<UserProfile> {
+  return apiFetch<UserProfile>('/api/users/me/', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
 
 /** Ответ POST /api/auth/login/ (успех без обёртки data или с success). */
 export function loginResponseHint(data: unknown): string | null {

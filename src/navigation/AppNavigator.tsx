@@ -27,6 +27,7 @@ import {
   hydrateLocalReadChats,
   unreadCountNumber,
 } from '../lib/chatUnread';
+import { TAB_BAR_FLOAT_BOTTOM_DP } from '../lib/screenInsets';
 import {
   AuthStackParamList,
   ChatsStackParamList,
@@ -263,6 +264,7 @@ function MainTabs() {
           elevation: 0,
           shadowOpacity: 0,
           minHeight: tabBarMetrics.tabBarMinHeight,
+          marginBottom: TAB_BAR_FLOAT_BOTTOM_DP,
         },
         tabBarIconStyle: { marginTop: 2 },
         tabBarIcon: ({ color }) => {

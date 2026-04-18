@@ -26,10 +26,12 @@ import {
 } from '../../lib/chatUnread';
 import { prefetchChatRoom } from '../../lib/chatRoomPrefetch';
 import { ChatsStackParamList } from '../../navigation/types';
+import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import type { ThemeColors } from '../../theme';
 import { parseAttachments, isImageAttachment } from '../../utils/chatAttachments';
 import { chatTypeLabelRu } from '../../utils/taskLabels';
+import { usePrivateChatPeerTitles } from './usePrivateChatPeerTitles';
 
 type Props = StackScreenProps<ChatsStackParamList, 'ChatsHome'>;
 
@@ -57,8 +59,20 @@ function formatChatListTime(msOrIso: string | number | undefined): string {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
+function listRowInitials(chatName: string): string {
+  const parts = chatName.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = parts[0][0];
+    const b = parts[1][0];
+    if (a && b) return (a + b).toUpperCase();
+  }
+  const s = parts[0] || chatName.trim() || '?';
+  return s.slice(0, 1).toUpperCase();
+}
+
 export default function ChatsListScreen({ navigation }: Props) {
   const { colors, radii } = useTheme();
+  const { user } = useAuth();
   const styles = useMemo(() => createChatsListStyles(colors, radii), [colors, radii]);
   const insets = useSafeAreaInsets();
   const tabScrollBottom = useTabScrollBottomPadding();
@@ -170,6 +184,9 @@ export default function ChatsListScreen({ navigation }: Props) {
     });
   }, [navigation]);
 
+  const myUserId = String(user?.user_id ?? user?._uid ?? user?._id ?? '').trim();
+  const { chatRowTitle } = usePrivateChatPeerTitles(items, myUserId);
+
   async function loadMore() {
     if (!nextCursor) return;
     await hydrateLocalReadChats();
@@ -192,8 +209,9 @@ export default function ChatsListScreen({ navigation }: Props) {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     const name = String(item.name ?? '').toLowerCase();
+    const resolved = chatRowTitle(item).toLowerCase();
     const preview = extractChatLastPreview(item).toLowerCase();
-    return name.includes(q) || preview.includes(q);
+    return name.includes(q) || resolved.includes(q) || preview.includes(q);
   });
 
   return (
@@ -245,8 +263,9 @@ export default function ChatsListScreen({ navigation }: Props) {
       onEndReached={loadMore}
       onEndReachedThreshold={0.4}
       renderItem={({ item }) => {
-        const id = String(item._id ?? '');
+        const id = String(item._id ?? '').trim();
         const typeRaw = String(item.type ?? '').trim();
+        const isPrivate = typeRaw.toLowerCase() === 'private';
         const typeRu = chatTypeLabelRu(typeRaw);
         const preview = extractChatLastPreview(item);
         const lastAt = extractChatLastMessageAt(item);
@@ -258,6 +277,9 @@ export default function ChatsListScreen({ navigation }: Props) {
               ? 'people-outline'
               : 'person-outline';
         const timeStr = lastAt > 0 ? formatChatListTime(lastAt) : '';
+        const apiTitle = String(item.name ?? 'Чат').trim() || 'Чат';
+        const chatTitle = chatRowTitle(item) || apiTitle;
+        const rowInitials = isPrivate ? listRowInitials(chatTitle) : '';
 
         return (
           <Pressable
@@ -282,19 +304,25 @@ export default function ChatsListScreen({ navigation }: Props) {
               }
               navigation.navigate('ChatRoom', {
                 chatId: id,
-                title: String(item.name ?? 'Чат'),
+                title: chatTitle,
               });
               setOpeningChatId(null);
             }}
             android_ripple={{ color: colors.chipActive }}
           >
             <View style={styles.avatar}>
-              <Ionicons name={iconName} size={20} color={colors.primary} />
+              {isPrivate ? (
+                <Text style={styles.avatarInitials} numberOfLines={1}>
+                  {rowInitials}
+                </Text>
+              ) : (
+                <Ionicons name={iconName} size={20} color={colors.primary} />
+              )}
             </View>
             <View style={styles.rowBody}>
               <View style={styles.titleRow}>
                 <Text style={styles.name} numberOfLines={1}>
-                  {String(item.name ?? 'Чат')}
+                  {chatTitle}
                 </Text>
                 <View style={styles.titleRight}>
                   {openingChatId === id ? (
@@ -398,12 +426,17 @@ function createChatsListStyles(colors: ThemeColors, radii: ThemeRadii) {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.chip,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+  },
+  avatarInitials: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary,
   },
   rowBody: { flex: 1, minWidth: 0 },
   titleRow: {

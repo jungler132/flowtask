@@ -1,11 +1,14 @@
 import { API_BASE } from '../config';
-import { ApiError, parseResponse } from './client';
+import { ApiError, apiFetch, parseResponse } from './client';
 import { getAccessToken } from '../lib/storage';
+import { resolveFileUrl } from '../utils/chatAttachments';
 
 export type FileUploadResult = {
   id: string;
   original_name?: string;
   mime_type?: string;
+  /** Прямая ссылка на файл для изображений, если сервер вернул в ответе upload. */
+  url?: string;
 };
 
 function pickUploadId(data: unknown): string {
@@ -65,9 +68,24 @@ export async function uploadFile(
   if (!id) {
     throw new ApiError('В ответе загрузки нет id файла', res.status, parsed);
   }
+  const rawUrl = typeof parsed.url === 'string' ? parsed.url.trim() : '';
   return {
     id,
     original_name: typeof parsed.original_name === 'string' ? parsed.original_name : fileName,
     mime_type: typeof parsed.mime_type === 'string' ? parsed.mime_type : mimeType,
+    ...(rawUrl ? { url: resolveFileUrl(rawUrl) } : {}),
   };
+}
+
+/** GET /api/files/{id}/ — метаданные; поле `url` подходит для expo-image с Authorization. */
+export async function fetchFileAttachmentMeta(fileId: string): Promise<Record<string, unknown>> {
+  const id = encodeURIComponent(fileId.trim());
+  return apiFetch<Record<string, unknown>>(`/api/files/${id}/`);
+}
+
+export function fileMetaToAbsoluteUrl(meta: unknown): string {
+  if (!meta || typeof meta !== 'object') return '';
+  const u = String((meta as Record<string, unknown>).url ?? '').trim();
+  if (!u) return '';
+  return resolveFileUrl(u);
 }

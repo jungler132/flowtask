@@ -1,7 +1,10 @@
 import type { StackScreenProps } from '@react-navigation/stack';
-import { useMemo, useState } from 'react';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,8 +12,15 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
+import { patchMyProfile, type UserProfile } from '../api/authApi';
+import {
+  fetchFileAttachmentMeta,
+  fileMetaToAbsoluteUrl,
+  uploadFile,
+} from '../api/filesApi';
+import { getAccessToken } from '../lib/storage';
 import { useTabScrollBottomPadding } from '../lib/screenInsets';
-import type { UserProfile } from '../api/authApi';
+import { extractUserAvatarUrl } from '../utils/userAvatar';
 import { useAuth } from '../context/AuthContext';
 import { useTheme, type ThemeMode } from '../context/ThemeContext';
 import type { ProfileStackParamList } from '../navigation/types';
@@ -102,19 +112,35 @@ function createProfileStyles(
       alignItems: 'center',
       marginBottom: 24,
     },
-    avatar: {
+    avatarPress: {
       width: 80,
       height: 80,
       borderRadius: 40,
+      overflow: 'hidden',
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.card,
+    },
+    avatarPressInitials: {
       backgroundColor: colors.primary,
       alignItems: 'center',
       justifyContent: 'center',
-      marginBottom: 14,
+    },
+    avatarImage: {
+      width: '100%',
+      height: '100%',
     },
     avatarText: {
       color: colors.onPrimary,
       fontSize: 28,
       fontWeight: '700',
+    },
+    avatarHint: {
+      color: colors.muted,
+      fontSize: 13,
+      textAlign: 'center',
+      marginBottom: 14,
     },
     name: {
       color: colors.text,
@@ -261,6 +287,91 @@ export default function ProfileScreen({ navigation }: Props) {
     [colors, layout, radii, shadowCard],
   );
   const [busy, setBusy] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarBroken, setAvatarBroken] = useState(false);
+  const [avatarLocalUri, setAvatarLocalUri] = useState<string | null>(null);
+  const [imgHeaders, setImgHeaders] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    getAccessToken().then((t) => {
+      if (t) setImgHeaders({ Authorization: `Bearer ${t}` });
+    });
+  }, []);
+
+  const avatarUrl = useMemo(
+    () => (user ? extractUserAvatarUrl(user as unknown as Record<string, unknown>) : ''),
+    [user],
+  );
+
+  const displayAvatarUri = (avatarLocalUri || avatarUrl || '').trim();
+  const isLocalAvatarUri =
+    displayAvatarUri.startsWith('file:') ||
+    displayAvatarUri.startsWith('content:') ||
+    displayAvatarUri.startsWith('ph');
+  const hasAuthHeader = !!imgHeaders.Authorization;
+
+  useEffect(() => {
+    setAvatarBroken(false);
+  }, [avatarUrl]);
+
+  async function pickAndUploadAvatar() {
+    if (!user || avatarBusy) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках устройства.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.88,
+      allowsEditing: true,
+      aspect: [1, 1],
+    });
+    if (res.canceled || !res.assets?.[0]) return;
+    const a = res.assets[0];
+    setAvatarLocalUri(a.uri);
+    setAvatarBroken(false);
+    setAvatarBusy(true);
+    try {
+      const up = await uploadFile(
+        a.uri,
+        a.fileName || 'avatar.jpg',
+        a.mimeType || 'image/jpeg',
+      );
+      const updated = await patchMyProfile({ avatar_id: up.id });
+      const upd = updated as Record<string, unknown>;
+      let resolvedUrl = '';
+      try {
+        const meta = await fetchFileAttachmentMeta(up.id);
+        resolvedUrl = fileMetaToAbsoluteUrl(meta);
+      } catch {
+        /* метаданные недоступны — ниже fallback */
+      }
+      if (!resolvedUrl && up.url) resolvedUrl = up.url;
+      if (!resolvedUrl) resolvedUrl = extractUserAvatarUrl(updated);
+      await refreshProfile({
+        ...upd,
+        ...(resolvedUrl ? { avatar_url: resolvedUrl } : {}),
+      } as UserProfile);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert(
+        'Не удалось обновить фото',
+        `${msg}\n\nЕсли ошибка повторяется, на сервере может называться другое поле (не avatar_id).`,
+      );
+    } finally {
+      setAvatarLocalUri(null);
+      setAvatarBusy(false);
+    }
+  }
+
+  function onAvatarPress() {
+    if (!user || avatarBusy) return;
+    Alert.alert('Фото профиля', 'Выберите квадратное изображение — оно будет сохранено как аватар.', [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Из галереи', onPress: () => void pickAndUploadAvatar() },
+    ]);
+  }
 
   if (!user) {
     return (
@@ -297,9 +408,55 @@ export default function ProfileScreen({ navigation }: Props) {
       contentContainerStyle={[styles.content, { paddingBottom: tabScrollBottom }]}
     >
       <View style={styles.hero}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials(user)}</Text>
-        </View>
+        <Pressable
+          onPress={onAvatarPress}
+          disabled={avatarBusy}
+          style={[
+            styles.avatarPress,
+            (!displayAvatarUri || avatarBroken) && styles.avatarPressInitials,
+            avatarBusy && { opacity: 0.65 },
+          ]}
+          accessibilityLabel="Сменить фото профиля"
+        >
+          {(() => {
+            const showRemote =
+              !!displayAvatarUri &&
+              !isLocalAvatarUri &&
+              hasAuthHeader &&
+              !avatarBroken;
+            const showLocal =
+              !!displayAvatarUri && isLocalAvatarUri && !avatarBroken;
+            const waitingToken =
+              !!displayAvatarUri &&
+              !isLocalAvatarUri &&
+              !hasAuthHeader &&
+              !avatarBroken;
+            if (showLocal || showRemote) {
+              return (
+                <Image
+                  source={
+                    isLocalAvatarUri
+                      ? { uri: displayAvatarUri }
+                      : { uri: displayAvatarUri, headers: imgHeaders }
+                  }
+                  style={styles.avatarImage}
+                  contentFit="cover"
+                  transition={200}
+                  onError={() => setAvatarBroken(true)}
+                />
+              );
+            }
+            if (waitingToken || avatarBusy) {
+              return (
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                  <ActivityIndicator color={colors.onPrimary} />
+                </View>
+              );
+            }
+            return <Text style={styles.avatarText}>{initials(user)}</Text>;
+          })()}
+        </Pressable>
+        <Text style={styles.avatarHint}>Нажмите на фото, чтобы сменить</Text>
         <Text style={styles.name}>{nameLine}</Text>
         {emailLine ? <Text style={styles.email}>{emailLine}</Text> : null}
         {roleLine ? (

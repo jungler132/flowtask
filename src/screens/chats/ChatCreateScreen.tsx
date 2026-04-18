@@ -3,6 +3,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { useMemo, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -234,29 +235,13 @@ export default function ChatCreateScreen({ navigation }: Props) {
   }
 
   return (
+    <>
     <ScrollView
       style={styles.root}
       contentContainerStyle={[styles.scrollContent, { paddingBottom: tabScrollBottom }]}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
     >
-      <UserInvitePickerModal
-        visible={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        excludeIds={participantIdsParsed}
-        primaryLabel="Добавить в список"
-        onApply={mergePickedUsers}
-      />
-
-      <TaskPickerModal
-        visible={taskPickerOpen}
-        onClose={() => setTaskPickerOpen(false)}
-        onPick={(t) => {
-          setTaskPicked(t);
-          setTaskIdManual('');
-          setTaskPickerOpen(false);
-        }}
-      />
-
       <Text style={styles.lead}>
         Выберите тип чата. Участников можно добавить из каталога организации или вписать их ID вручную.
       </Text>
@@ -307,7 +292,10 @@ export default function ChatCreateScreen({ navigation }: Props) {
       </Text>
       <Pressable
         style={styles.btnPick}
-        onPress={() => setPickerOpen(true)}
+        onPress={() => {
+          Keyboard.dismiss();
+          setPickerOpen(true);
+        }}
         disabled={busy}
       >
         <Ionicons name="people-outline" size={22} color={colors.primary} style={styles.btnPickIcon} />
@@ -359,7 +347,10 @@ export default function ChatCreateScreen({ navigation }: Props) {
           </Text>
           <Pressable
             style={styles.btnPick}
-            onPress={() => setTaskPickerOpen(true)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setTaskPickerOpen(true);
+            }}
             disabled={busy}
           >
             <Ionicons
@@ -416,6 +407,23 @@ export default function ChatCreateScreen({ navigation }: Props) {
         <Text style={styles.btnText}>{busy ? 'Создание…' : 'Создать чат'}</Text>
       </Pressable>
     </ScrollView>
+    <UserInvitePickerModal
+      visible={pickerOpen}
+      onClose={() => setPickerOpen(false)}
+      excludeIds={participantIdsParsed}
+      primaryLabel="Добавить в список"
+      onApply={mergePickedUsers}
+    />
+    <TaskPickerModal
+      visible={taskPickerOpen}
+      onClose={() => setTaskPickerOpen(false)}
+      onPick={(t) => {
+        setTaskPicked(t);
+        setTaskIdManual('');
+        setTaskPickerOpen(false);
+      }}
+    />
+    </>
   );
 }
 

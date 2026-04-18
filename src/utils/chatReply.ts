@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../api/chatsApi';
 import {
   displayableMessageText,
+  isImageAttachment,
   parseAttachments,
   shortSenderId,
 } from './chatAttachments';
@@ -16,11 +17,12 @@ export function getMessageId(m: ChatMessage): string {
 }
 
 function previewFromMessageLike(o: Record<string, unknown>): string {
-  const hasAtt = parseAttachments(o.attachments).length > 0;
+  const atts = parseAttachments(o.attachments);
+  const hasAtt = atts.length > 0;
   const body = displayableMessageText(String(o.content ?? ''), hasAtt);
   const t = (body ?? '').trim();
   if (t) return t.length > 160 ? `${t.slice(0, 157)}…` : t;
-  if (hasAtt) return 'Вложение';
+  if (hasAtt) return atts.some((a) => isImageAttachment(a)) ? '📷 фото' : '📎 файл';
   return '…';
 }
 
@@ -110,11 +112,12 @@ export function buildReplyDraftFromMessage(
       (sid && senderNames[sid]) || (sid ? shortSenderId(sid) : 'Сообщение');
   }
 
-  const hasAtt = parseAttachments(o.attachments).length > 0;
+  const atts = parseAttachments(o.attachments);
+  const hasAtt = atts.length > 0;
   const body = displayableMessageText(String(o.content ?? ''), hasAtt);
   const raw = (body ?? '').trim();
-  const preview =
-    raw.length > 200 ? `${raw.slice(0, 197)}…` : raw || (hasAtt ? 'Вложение' : '…');
+  const attHint = hasAtt ? (atts.some((a) => isImageAttachment(a)) ? '📷 фото' : '📎 файл') : '…';
+  const preview = raw.length > 200 ? `${raw.slice(0, 197)}…` : raw || attHint;
 
   return { messageId, senderName, preview };
 }

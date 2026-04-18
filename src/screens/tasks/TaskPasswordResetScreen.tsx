@@ -72,7 +72,7 @@ export default function TaskPasswordResetScreen({ navigation }: Props) {
     () => createTaskPasswordResetStyles(colors, radii, shadowCard),
     [colors, radii, shadowCard],
   );
-  const [title, setTitle] = useState('Восстановление пароля от рабочей почты');
+  const [title, setTitle] = useState('Восстановление пароля от почты');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
 

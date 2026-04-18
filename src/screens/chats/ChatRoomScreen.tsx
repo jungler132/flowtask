@@ -28,7 +28,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import type { KeyboardEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError, apiFetch } from '../../api/client';
 import {
@@ -43,7 +42,7 @@ import {
   sendMessage,
 } from '../../api/chatsApi';
 import { fetchUser } from '../../api/usersApi';
-import { uploadFile } from '../../api/filesApi';
+import { fetchFileAttachmentMeta, fileMetaToAbsoluteUrl, uploadFile } from '../../api/filesApi';
 import { HeaderLink, HeaderRow } from '../../components/HeaderActions';
 import { consumePrefetchedChatRoom } from '../../lib/chatRoomPrefetch';
 import { markChatLocallyRead } from '../../lib/chatUnread';
@@ -58,13 +57,19 @@ import {
   resolveFileUrl,
   shortSenderId,
 } from '../../utils/chatAttachments';
-import { buildForwardContent, extractAttachmentIdsFromMessage } from '../../utils/chatForward';
+import {
+  buildForwardContent,
+  extractAttachmentIdsFromMessage,
+  parseForwardedMessageContent,
+} from '../../utils/chatForward';
+import { extractUserAvatarUrl } from '../../utils/userAvatar';
 import {
   buildReplyDraftFromMessage,
   extractReplyMeta,
   getMessageId,
   type ReplyDraft,
 } from '../../utils/chatReply';
+import { usePrivateChatPeerTitles } from './usePrivateChatPeerTitles';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import type { ThemeColors } from '../../theme';
@@ -72,6 +77,9 @@ import type { ThemeColors } from '../../theme';
 type Props = StackScreenProps<ChatsStackParamList, 'ChatRoom'>;
 
 type PendingAttachment = { uri: string; name: string; mime: string };
+
+/** Отложенный system share после закрытия превью (иначе Android «залипает» под нативным листом). */
+type PendingNativeShare = { local: string; mimeType?: string; dialogTitle: string };
 
 const WIN_H = Dimensions.get('window').height;
 
@@ -141,6 +149,40 @@ async function downloadAttachmentToLocal(att: ChatAttachment): Promise<string> {
   return res.uri;
 }
 
+/** Пересылка: новый id файла в целевом чате (часто старые id из другого чата API не принимает). */
+async function collectForwardAttachmentIds(src: ChatMessage): Promise<string[]> {
+  const raw = (src as Record<string, unknown>).attachments;
+  const atts = parseAttachments(raw);
+  if (atts.length === 0) {
+    return extractAttachmentIdsFromMessage(src);
+  }
+  const out: string[] = [];
+  for (const att of atts) {
+    const row = att as Record<string, unknown>;
+    const url = att.url ? resolveFileUrl(att.url) : '';
+    const mime =
+      (typeof att.type === 'string' && att.type.trim()) ||
+      (isImageAttachment(att) ? 'image/jpeg' : 'application/octet-stream');
+    const name =
+      (typeof att.name === 'string' && att.name.trim()) ||
+      (isImageAttachment(att) ? 'photo.jpg' : 'file');
+    if (url) {
+      try {
+        const local = await downloadAttachmentToLocal(att);
+        const up = await uploadFile(local, name, mime);
+        out.push(up.id);
+      } catch {
+        const fallback = String(att.id ?? row._id ?? row.file_id ?? '').trim();
+        if (fallback) out.push(fallback);
+      }
+    } else {
+      const id = String(att.id ?? row._id ?? row.file_id ?? '').trim();
+      if (id) out.push(id);
+    }
+  }
+  return out;
+}
+
 function inlineSenderName(item: ChatMessage): string | null {
   const o = item as Record<string, unknown>;
   for (const k of ['sender_full_name', 'sender_name', 'sender_display_name']) {
@@ -148,6 +190,61 @@ function inlineSenderName(item: ChatMessage): string | null {
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return null;
+}
+
+/** Любая буква Unicode (китайский, арабский, кириллица и т.д.). */
+const UNICODE_LETTER = /\p{L}/u;
+
+/** Первые `max` букв по порядку в строке (пропуск цифр, эмодзи и т.п.). */
+function takeUnicodeLetters(s: string, max: number): string {
+  let out = '';
+  for (const ch of s) {
+    if (UNICODE_LETTER.test(ch)) {
+      out += ch;
+      if (out.length >= max) break;
+    }
+  }
+  return out;
+}
+
+/** Два латинских символа A–Z из id без букв — не цифры в кружке, стабильно для одного user id. */
+function pseudoLetterPairFromId(raw: string): string {
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+  const n = Math.abs(h);
+  const a = 0x41 + (n % 26);
+  const b = 0x41 + ((Math.floor(n / 26) % 26) || 0);
+  return String.fromCharCode(a, b);
+}
+
+/**
+ * Инициалы в кружке, если нет фото.
+ * Не показываем пару «голых» цифр из id; при отсутствии букв в id — псевдоинициалы из хэша.
+ */
+function bubblePersonInitials(label: string, senderIdFallback: string): string {
+  const t = label.replace(/…/g, '').trim();
+  if (t.length >= 1 && !/^\d+$/.test(t)) {
+    const parts = t.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      const a = takeUnicodeLetters(parts[0], 1);
+      const b = takeUnicodeLetters(parts[1], 1);
+      if (a && b) return (a + b).toUpperCase();
+    }
+    if (parts.length >= 1) {
+      const run = takeUnicodeLetters(parts.join(' '), 2);
+      if (run.length >= 2) return run.toUpperCase();
+      if (run.length === 1) return (run + run).toUpperCase();
+      const one = parts.map((p) => takeUnicodeLetters(p, 1)).find(Boolean);
+      if (one) return one.toUpperCase();
+    }
+  }
+  const idPool = `${shortSenderId(senderIdFallback)} ${senderIdFallback}`;
+  const fromId = takeUnicodeLetters(idPool, 2);
+  if (fromId.length >= 2) return fromId.toUpperCase();
+  if (fromId.length === 1) return (fromId + fromId).toUpperCase();
+  const raw = String(senderIdFallback ?? '').trim();
+  if (raw.length > 0) return pseudoLetterPairFromId(raw);
+  return '?';
 }
 
 /**
@@ -217,6 +314,9 @@ function MessageBubble({
   onOpenAttachment,
   showGroupSender,
   resolvedSenderName,
+  senderAvatarUrl,
+  myAvatarUrl,
+  myInitials,
   replyMeta,
   onOpenActions,
   onNavigateToReply,
@@ -229,6 +329,12 @@ function MessageBubble({
   showGroupSender: boolean;
   /** Имя с API пользователей; пустая строка = ещё грузим. */
   resolvedSenderName: string;
+  /** URL аватара собеседника (карта из GET /api/users/ + поля в сообщении). */
+  senderAvatarUrl: string;
+  /** URL аватара текущего пользователя (мои сообщения). */
+  myAvatarUrl: string;
+  /** Инициалы текущего пользователя, если нет фото. */
+  myInitials: string;
   replyMeta: ReplyDraft | null;
   onOpenActions: () => void;
   onNavigateToReply: (messageId: string) => void;
@@ -240,13 +346,42 @@ function MessageBubble({
     sid !== '' && comparableUserId(sid) === comparableUserId(mySenderId);
   const attachments = parseAttachments(item.attachments);
   const hasAtt = attachments.length > 0;
-  const body = displayableMessageText(String(item.content ?? ''), hasAtt);
+  const rawMsgContent = String(item.content ?? '');
+  const fwd = parseForwardedMessageContent(rawMsgContent);
+  const captionRaw = fwd ? fwd.caption : rawMsgContent;
+  const hideCaptionWhenPhotoForwarded =
+    !!fwd &&
+    hasAtt &&
+    attachments.some((a) => isImageAttachment(a)) &&
+    captionRaw.trim() === '📷 фото';
+  const body = displayableMessageText(
+    hideCaptionWhenPhotoForwarded ? '' : captionRaw,
+    hasAtt
+  );
   const time = formatMessageTime(String(item.created_at ?? ''));
   const fromApi = inlineSenderName(item);
   const senderLine =
     !isMine && showGroupSender
       ? fromApi || resolvedSenderName || '…'
       : null;
+
+  const otherNameForInitials =
+    (showGroupSender ? fromApi || resolvedSenderName : '') ||
+    fromApi ||
+    resolvedSenderName ||
+    '';
+  const otherInitials = bubblePersonInitials(otherNameForInitials, sid);
+
+  const msgId = normId(getMessageId(item));
+  const [otherPhotoFailed, setOtherPhotoFailed] = useState(false);
+  const [minePhotoFailed, setMinePhotoFailed] = useState(false);
+  useEffect(() => {
+    setOtherPhotoFailed(false);
+    setMinePhotoFailed(false);
+  }, [msgId]);
+
+  const remoteOther = !!senderAvatarUrl.trim() && !otherPhotoFailed;
+  const remoteMine = !!myAvatarUrl.trim() && !minePhotoFailed;
 
   return (
     <Pressable
@@ -255,6 +390,23 @@ function MessageBubble({
       style={[styles.msgRow, isMine && styles.msgRowMine]}
       accessibilityHint="Удерживайте: ответить, переслать или пожаловаться"
     >
+      {!isMine ? (
+        <View style={styles.msgAvatarSlot}>
+          {remoteOther ? (
+            <Image
+              source={{ uri: senderAvatarUrl.trim(), headers: authHeaders }}
+              style={styles.msgAvatarPhoto}
+              contentFit="cover"
+              transition={120}
+              onError={() => setOtherPhotoFailed(true)}
+            />
+          ) : (
+            <View style={styles.msgAvatarInitialsOther}>
+              <Text style={styles.msgAvatarInitialsOtherText}>{otherInitials}</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
       <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
         {replyMeta ? (
           <Pressable
@@ -263,7 +415,10 @@ function MessageBubble({
             accessibilityRole="button"
             accessibilityLabel={`Перейти к сообщению: ${replyMeta.senderName}`}
           >
-            <View style={[styles.replyQuoteAccent, isMine && styles.replyQuoteAccentMine]} />
+            <View
+              style={[styles.replyQuoteAccent, isMine && styles.replyQuoteAccentMine]}
+              pointerEvents="none"
+            />
             <View style={styles.replyQuoteBody}>
               <Text style={styles.replyQuoteName} numberOfLines={1}>
                 {replyMeta.senderName}
@@ -273,6 +428,16 @@ function MessageBubble({
               </Text>
             </View>
           </Pressable>
+        ) : null}
+        {fwd ? (
+          <View
+            style={[styles.forwardStrip, isMine ? styles.forwardStripMine : styles.forwardStripOther]}
+            accessibilityLabel={`Переслано: ${fwd.headerLine}`}
+          >
+            <Text style={styles.forwardStripText} numberOfLines={2}>
+              {fwd.headerLine}
+            </Text>
+          </View>
         ) : null}
         {senderLine ? <Text style={styles.senderName}>{senderLine}</Text> : null}
         {attachments.map((att, idx) => {
@@ -317,6 +482,23 @@ function MessageBubble({
           <Text style={[styles.time, isMine && styles.timeMine]}>{time}</Text>
         ) : null}
       </View>
+      {isMine ? (
+        <View style={styles.msgAvatarMineSlot}>
+          {remoteMine ? (
+            <Image
+              source={{ uri: myAvatarUrl.trim(), headers: authHeaders }}
+              style={styles.msgAvatarPhotoMine}
+              contentFit="cover"
+              transition={120}
+              onError={() => setMinePhotoFailed(true)}
+            />
+          ) : (
+            <View style={styles.msgAvatarInitialsMine}>
+              <Text style={styles.msgAvatarInitialsMineText}>{myInitials}</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -333,11 +515,14 @@ function ForwardChatPickerModal({
   onSelect: (targetChatId: string, title: string) => void;
 }) {
   const { colors, radii } = useTheme();
+  const { user } = useAuth();
   const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const insets = useSafeAreaInsets();
   const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
+  const myUserId = String(user?.user_id ?? user?._uid ?? user?._id ?? '').trim();
+  const { chatRowTitle } = usePrivateChatPeerTitles(chats, myUserId);
 
   useEffect(() => {
     if (!visible) return;
@@ -350,12 +535,14 @@ function ForwardChatPickerModal({
   }, [visible]);
 
   const cur = normId(currentChatId).toLowerCase();
+  const qLower = q.trim().toLowerCase();
   const filtered = chats.filter((c) => {
     const id = normId(String(c._id ?? '')).toLowerCase();
     if (id === cur || id.replace(/^chat_/, '') === cur.replace(/^chat_/, '')) return false;
-    if (!q.trim()) return true;
+    if (!qLower) return true;
     const name = String(c.name ?? '').toLowerCase();
-    return name.includes(q.trim().toLowerCase());
+    const resolved = chatRowTitle(c).toLowerCase();
+    return name.includes(qLower) || resolved.includes(qLower);
   });
 
   return (
@@ -385,17 +572,20 @@ function ForwardChatPickerModal({
             keyExtractor={(c, i) => String(c._id ?? `fc-${i}`)}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.forwardList}
-            renderItem={({ item }) => (
+            renderItem={({ item }) => {
+              const title = chatRowTitle(item) || String(item.name ?? 'Чат');
+              return (
               <Pressable
                 style={styles.forwardRow}
-                onPress={() => onSelect(String(item._id ?? ''), String(item.name ?? 'Чат'))}
+                onPress={() => onSelect(String(item._id ?? ''), title)}
               >
                 <Text style={styles.forwardRowName} numberOfLines={2}>
-                  {String(item.name ?? 'Чат')}
+                  {title}
                 </Text>
                 <Ionicons name="chevron-forward" size={20} color={colors.muted} />
               </Pressable>
-            )}
+              );
+            }}
             ListEmptyComponent={
               <Text style={styles.forwardEmpty}>
                 {q.trim() ? 'Ничего не найдено' : 'Нет других чатов для пересылки'}
@@ -413,11 +603,14 @@ function AttachmentPreviewModal({
   attachment,
   authHeaders,
   onClose,
+  onNativeShareReady,
 }: {
   visible: boolean;
   attachment: ChatAttachment | null;
   authHeaders: Record<string, string>;
   onClose: () => void;
+  /** Закрывает превью и открывает нативный share уже с экрана чата (надёжнее, чем share из Modal). */
+  onNativeShareReady: (p: PendingNativeShare) => void;
 }) {
   const { colors, radii } = useTheme();
   const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
@@ -431,14 +624,6 @@ function AttachmentPreviewModal({
   const url = attachment?.url ? resolveFileUrl(attachment.url) : '';
   const isImage = attachment ? isImageAttachment(attachment) : false;
   const title = attachment?.name || (isImage ? 'Изображение' : 'Файл');
-
-  /** Нативное «Поделиться» поверх прозрачного Modal на Android ломает касания — сначала закрываем окно. */
-  async function waitForModalDismissed() {
-    await new Promise<void>((resolve) => {
-      InteractionManager.runAfterInteractions(() => resolve());
-    });
-    await new Promise<void>((r) => setTimeout(r, Platform.OS === 'android' ? 80 : 32));
-  }
 
   async function onDownload() {
     if (!attachment) return;
@@ -460,9 +645,8 @@ function AttachmentPreviewModal({
       }
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
-        onClose();
-        await waitForModalDismissed();
-        await Sharing.shareAsync(local, {
+        onNativeShareReady({
+          local,
           mimeType: attachment.type || undefined,
           dialogTitle: 'Сохранить файл',
         });
@@ -492,9 +676,8 @@ function AttachmentPreviewModal({
         Alert.alert('Недоступно', 'На этом устройстве нет окна «Поделиться».');
         return;
       }
-      onClose();
-      await waitForModalDismissed();
-      await Sharing.shareAsync(local, {
+      onNativeShareReady({
+        local,
         mimeType: attachment.type || undefined,
         dialogTitle: 'Поделиться',
       });
@@ -595,6 +778,21 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   const styles = useMemo(() => createChatRoomStyles(colors, radii), [colors, radii]);
   const { chatId } = route.params;
   const { user } = useAuth();
+  const myAvatarUrl = useMemo(
+    () => extractUserAvatarUrl(user as unknown as Record<string, unknown>),
+    [user],
+  );
+  const myBubbleInitials = useMemo(() => {
+    const n = String(user?.full_name ?? '').trim();
+    const em = String(user?.email ?? '').trim();
+    const s = n || em;
+    if (!s) return '?';
+    const parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2 && parts[0][0] && parts[1][0]) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return s.slice(0, 1).toUpperCase();
+  }, [user]);
   const senderId = String(user?.user_id ?? user?._uid ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -603,9 +801,11 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<PendingAttachment | null>(null);
   const [previewAtt, setPreviewAtt] = useState<ChatAttachment | null>(null);
+  const [pendingNativeShare, setPendingNativeShare] = useState<PendingNativeShare | null>(null);
   const [authHeaders, setAuthHeaders] = useState<Record<string, string>>({});
   const [chatType, setChatType] = useState<string | null>(null);
   const [senderNames, setSenderNames] = useState<Record<string, string>>({});
+  const [senderAvatarUrls, setSenderAvatarUrls] = useState<Record<string, string>>({});
   const [initialLoad, setInitialLoad] = useState(true);
   const [initialPositioned, setInitialPositioned] = useState(false);
   /** Ответ на сообщение (как в Telegram) */
@@ -623,26 +823,52 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   const messagesRef = useRef<ChatMessage[]>([]);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
-  /** Android: KAV с padding часто не поднимает инпут; отступ по высоте клавиатуры. iOS — через KAV ниже. */
   const [keyboardBottomInset, setKeyboardBottomInset] = useState(0);
-
   const showGroupSender = chatType === 'group' || chatType === 'task';
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const onShow = (e: KeyboardEvent) => setKeyboardBottomInset(e.endCoordinates.height);
-    const onHide = () => setKeyboardBottomInset(0);
-    const subShow = Keyboard.addListener('keyboardDidShow', onShow);
-    const subHide = Keyboard.addListener('keyboardDidHide', onHide);
-    return () => {
-      subShow.remove();
-      subHide.remove();
-    };
-  }, []);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  /** Новое превью — сбрасываем отложенный share, чтобы не открыть старый файл. */
+  useEffect(() => {
+    if (previewAtt !== null) {
+      setPendingNativeShare(null);
+    }
+  }, [previewAtt]);
+
+  /** Share только после того, как модалка превью снята с экрана (один таймер, без onDismiss). */
+  useEffect(() => {
+    if (previewAtt !== null || pendingNativeShare === null) return;
+    const job = pendingNativeShare;
+    const delayMs = Platform.OS === 'android' ? 480 : 100;
+    const id = setTimeout(() => {
+      void (async () => {
+        try {
+          const ok = await Sharing.isAvailableAsync();
+          if (!ok) {
+            Alert.alert('Недоступно', 'На этом устройстве нет окна «Поделиться».');
+            return;
+          }
+          await Sharing.shareAsync(job.local, {
+            mimeType: job.mimeType,
+            dialogTitle: job.dialogTitle,
+          });
+        } catch (e) {
+          const msg =
+            e instanceof ApiError
+              ? e.message
+              : e instanceof Error
+                ? e.message
+                : String(e);
+          Alert.alert('Не удалось поделиться', msg);
+        } finally {
+          setPendingNativeShare(null);
+        }
+      })();
+    }, delayMs);
+    return () => clearTimeout(id);
+  }, [previewAtt, pendingNativeShare]);
 
   useEffect(() => {
     getAccessToken().then((t) => {
@@ -756,6 +982,23 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     return () => sub.remove();
   }, [initialLoad, chatId, refreshLatestMessages]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const onShow = (e: { endCoordinates: { height: number } }) => {
+      const h = e.endCoordinates.height;
+      requestAnimationFrame(() => setKeyboardBottomInset(h));
+    };
+    const onHide = () => {
+      requestAnimationFrame(() => setKeyboardBottomInset(0));
+    };
+    const s1 = Keyboard.addListener('keyboardDidShow', onShow);
+    const s2 = Keyboard.addListener('keyboardDidHide', onHide);
+    return () => {
+      s1.remove();
+      s2.remove();
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       if (initialLoad) return;
@@ -781,6 +1024,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
   useEffect(() => {
     senderFetchDone.current.clear();
     setSenderNames({});
+    setSenderAvatarUrls({});
     fetchChat(chatId)
       .then((c) =>
         setChatType(
@@ -792,8 +1036,8 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       .catch(() => setChatType(null));
   }, [chatId]);
 
+  /** Имя/аватар собеседника: и в группе, и в личном чате (раньше в DM не грузили — в кружке был «?»). */
   useEffect(() => {
-    if (!showGroupSender) return;
     const my = comparableUserId(senderId);
     for (const m of messages) {
       const raw = normId(String(m.sender_id ?? ''));
@@ -802,16 +1046,30 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       if (senderFetchDone.current.has(raw)) continue;
       senderFetchDone.current.add(raw);
       fetchUser(raw)
-        .then((u) => {
+        .then(async (u) => {
           const name =
             String(u.full_name ?? u.email ?? '').trim() || shortSenderId(raw);
+          let av = extractUserAvatarUrl(u as unknown as Record<string, unknown>);
+          if (!av) {
+            const o = u as Record<string, unknown>;
+            const idRaw = String(o.avatar_id ?? o.avatar_file_id ?? '').trim();
+            if (/^[0-9a-f-]{32,36}$/i.test(idRaw)) {
+              try {
+                const meta = await fetchFileAttachmentMeta(idRaw);
+                av = fileMetaToAbsoluteUrl(meta);
+              } catch {
+                /* без аватара */
+              }
+            }
+          }
           setSenderNames((prev) => ({ ...prev, [raw]: name }));
+          if (av) setSenderAvatarUrls((prev) => ({ ...prev, [raw]: av }));
         })
         .catch(() => {
           setSenderNames((prev) => ({ ...prev, [raw]: shortSenderId(raw) }));
         });
     }
-  }, [messages, senderId, showGroupSender]);
+  }, [messages, senderId]);
 
   useEffect(() => {
     if (initialLoad) return;
@@ -857,43 +1115,72 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     setAttachMenuVisible(false);
   }
 
+  /**
+   * Закрыть меню вложений и только потом открыть камеру/пикер.
+   * На Android вызов `launchCameraAsync` / `launchImageLibraryAsync` из того же кадра, что и `Modal`,
+   * даёт IllegalStateException: unregistered ActivityResultLauncher.
+   */
+  function runAfterAttachMenuClosed(run: () => void) {
+    closeAttachMenu();
+    InteractionManager.runAfterInteractions(() => {
+      if (Platform.OS === 'android') {
+        setTimeout(run, 450);
+      } else {
+        run();
+      }
+    });
+  }
+
   /** Alert на Android даёт максимум 3 кнопки — «Файл» пропадал. Своё меню — все варианты на любой ОС. */
   function openAttachMenu() {
+    Keyboard.dismiss();
     setAttachMenuVisible(true);
   }
 
   async function pickImage() {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках устройства.');
-      return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках устройства.');
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.85,
+        allowsMultipleSelection: false,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const a = res.assets[0];
+      setPending({
+        uri: a.uri,
+        name: a.fileName || 'photo.jpg',
+        mime: a.mimeType || 'image/jpeg',
+      });
+    } catch (e) {
+      const msg =
+        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
+      Alert.alert('Галерея', msg);
     }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.85,
-      allowsMultipleSelection: false,
-    });
-    if (res.canceled || !res.assets?.[0]) return;
-    const a = res.assets[0];
-    setPending({
-      uri: a.uri,
-      name: a.fileName || 'photo.jpg',
-      mime: a.mimeType || 'image/jpeg',
-    });
   }
 
   async function pickFile() {
-    const res = await DocumentPicker.getDocumentAsync({
-      type: '*/*',
-      copyToCacheDirectory: true,
-    });
-    if (res.canceled || !res.assets?.[0]) return;
-    const a = res.assets[0];
-    setPending({
-      uri: a.uri,
-      name: a.name || 'файл',
-      mime: a.mimeType || 'application/octet-stream',
-    });
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const a = res.assets[0];
+      setPending({
+        uri: a.uri,
+        name: a.name || 'файл',
+        mime: a.mimeType || 'application/octet-stream',
+      });
+    } catch (e) {
+      const msg =
+        e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
+      Alert.alert('Файл', msg);
+    }
   }
 
   /**
@@ -923,6 +1210,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       if (attachmentIds.length) body.attachments = attachmentIds;
       if (replyDraft) {
         body.reply_to = replyDraft.messageId;
+        body.reply_to_id = replyDraft.messageId;
       }
 
       await sendMessage(chatId, body);
@@ -1094,7 +1382,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       const fromTitle = route.params.title ?? 'Чат';
       const { content } = buildForwardContent(src, senderNames, fromTitle);
       const body: Record<string, unknown> = { sender_id: senderId, content };
-      const ids = extractAttachmentIdsFromMessage(src);
+      const ids = await collectForwardAttachmentIds(src);
       if (ids.length) body.attachments = ids;
       await sendMessage(targetChatId, body);
       setForwardTarget(null);
@@ -1126,86 +1414,40 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     if (e.nativeEvent.shiftKey) return;
     if (Platform.OS === 'web') onSend();
   }
+  /*
+   * Android — откуда берётся «блок» и геп над клавиатурой:
+   *
+   * • Корневой `View` — ниже `paddingBottom: androidKbRootPad` (доля от высоты IME).
+   * • `KeyboardAvoidingView` — `transform: translateY(-androidKbCompensateY)` (доля ANDROID_KB_TRANSLATE_RATIO).
+   * • Полоса с полем ввода — `View` с `styles.footer` + инлайн `paddingBottom` при открытой клаве.
+   * • Высота полосы ещё в `createChatRoomStyles`: `footer.paddingVertical`, `input.minHeight`, кнопки 44×44.
+   *
+   * Коэффициенты не опускаются ниже 0.0001 (чтобы случайно не умножить на 0).
+   */
+  const ANDROID_KB_ROOT_PAD_RATIO = Math.max(0.0001, 1);
+  const ANDROID_KB_TRANSLATE_RATIO = Math.max(0.0001, 0.9);
+  const androidKbInset = Platform.OS === 'android' ? keyboardBottomInset : 0;
+  const androidKbRootPad =
+    androidKbInset > 0 ? Math.max(1, Math.round(androidKbInset * ANDROID_KB_ROOT_PAD_RATIO)) : 0;
+  const androidKbCompensateY =
+    androidKbInset > 0
+      ? Math.min(
+          Math.floor(androidKbInset * ANDROID_KB_TRANSLATE_RATIO),
+          Math.max(0, androidKbInset - 6)
+        )
+      : 0;
 
   return (
-    <View
-      style={[
-        styles.root,
-        Platform.OS === 'android' && keyboardBottomInset > 0
-          ? { paddingBottom: keyboardBottomInset }
-          : null,
-      ]}
-    >
+    <View style={[styles.root, androidKbRootPad > 0 && { paddingBottom: androidKbRootPad }]}>
     <KeyboardAvoidingView
-      style={styles.keyboardFlex}
+      style={[
+        styles.keyboardFlex,
+        androidKbCompensateY > 0 && { transform: [{ translateY: -androidKbCompensateY }] },
+      ]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       enabled={Platform.OS === 'ios'}
       keyboardVerticalOffset={headerHeight}
     >
-      <AttachmentPreviewModal
-        visible={previewAtt !== null}
-        attachment={previewAtt}
-        authHeaders={authHeaders}
-        onClose={() => setPreviewAtt(null)}
-      />
-      <ForwardChatPickerModal
-        visible={forwardModalVisible}
-        currentChatId={chatId}
-        onClose={closeForwardModal}
-        onSelect={onForwardPickChat}
-      />
-
-      <Modal
-        visible={attachMenuVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeAttachMenu}
-        statusBarTranslucent
-      >
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.modalBackdrop} onPress={closeAttachMenu} accessibilityLabel="Закрыть" />
-          <View style={styles.attachMenuWrap} pointerEvents="box-none">
-            <View style={[styles.attachMenuCard, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
-              <Text style={styles.attachMenuTitle}>Прикрепить</Text>
-              <Text style={styles.attachMenuSubtitle}>Выберите тип вложения</Text>
-              <Pressable
-                style={styles.attachMenuRow}
-                onPress={() => {
-                  closeAttachMenu();
-                  void takePhoto();
-                }}
-              >
-                <Ionicons name="camera-outline" size={22} color={colors.primary} />
-                <Text style={styles.attachMenuRowText}>Сделать фото</Text>
-              </Pressable>
-              <Pressable
-                style={styles.attachMenuRow}
-                onPress={() => {
-                  closeAttachMenu();
-                  void pickImage();
-                }}
-              >
-                <Ionicons name="images-outline" size={22} color={colors.primary} />
-                <Text style={styles.attachMenuRowText}>Фото из галереи</Text>
-              </Pressable>
-              <Pressable
-                style={styles.attachMenuRow}
-                onPress={() => {
-                  closeAttachMenu();
-                  void pickFile();
-                }}
-              >
-                <Ionicons name="document-outline" size={22} color={colors.primary} />
-                <Text style={styles.attachMenuRowText}>Файл</Text>
-              </Pressable>
-              <Pressable style={styles.attachMenuCancel} onPress={closeAttachMenu}>
-                <Text style={styles.attachMenuCancelText}>Отмена</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {!initialLoad && nextCursor ? (
         <Pressable style={styles.moreBar} onPress={loadOlder} disabled={loadingOlder}>
           <Text style={styles.moreTxt}>
@@ -1221,14 +1463,14 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       ) : (
         <FlatList
           ref={listRef}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
           data={messages}
           keyExtractor={(m, i) => {
             const id = String((m as Record<string, unknown>)._id ?? '').trim();
             return id || `msg-${chatId}-${i}`;
           }}
           contentContainerStyle={styles.list}
-          style={!initialPositioned ? styles.hiddenList : undefined}
+          style={[styles.chatListFlex, !initialPositioned ? styles.hiddenList : null]}
           onScrollBeginDrag={() => {
             autoStickToBottom.current = false;
           }}
@@ -1260,7 +1502,45 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           }}
           renderItem={({ item }) => {
             const sid = normId(String(item.sender_id ?? ''));
-            const replyMeta = extractReplyMeta(item, senderNames);
+            let replyMeta = extractReplyMeta(item, senderNames);
+            if (replyMeta) {
+              const p = replyMeta.preview.trim();
+              const weak =
+                p === '…' ||
+                p === 'Вложение' ||
+                p === '' ||
+                p.length < 2;
+              if (weak) {
+                const rid = normId(replyMeta.messageId);
+                const orig = messages.find((m) => {
+                  const mid = normId(getMessageId(m));
+                  if (!mid || !rid) return false;
+                  const a = mid.toLowerCase();
+                  const b = rid.toLowerCase();
+                  return (
+                    a === b ||
+                    a.replace(/^msg_/, '') === b.replace(/^msg_/, '') ||
+                    a.endsWith(b) ||
+                    b.endsWith(a)
+                  );
+                });
+                if (orig) {
+                  const d = buildReplyDraftFromMessage(orig, senderNames);
+                  if (d) {
+                    replyMeta = {
+                      messageId: replyMeta.messageId,
+                      senderName: replyMeta.senderName.trim() || d.senderName,
+                      preview: d.preview,
+                    };
+                  }
+                }
+              }
+            }
+            const senderAv = (
+              senderAvatarUrls[sid] ||
+              extractUserAvatarUrl(item as unknown as Record<string, unknown>) ||
+              ''
+            ).trim();
             return (
               <MessageBubble
                 item={item}
@@ -1269,6 +1549,9 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
                 onOpenAttachment={setPreviewAtt}
                 showGroupSender={showGroupSender}
                 resolvedSenderName={senderNames[sid] ?? ''}
+                senderAvatarUrl={senderAv}
+                myAvatarUrl={myAvatarUrl}
+                myInitials={myBubbleInitials}
                 replyMeta={replyMeta}
                 onOpenActions={() => openMessageActions(item)}
                 onNavigateToReply={scrollToMessageById}
@@ -1322,7 +1605,18 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           </Pressable>
         </View>
       ) : null}
-      <View style={[styles.footer, { paddingBottom: Math.max(10, insets.bottom) }]}>
+      <View
+        collapsable={false}
+        style={[
+          styles.footer,
+          {
+            paddingBottom:
+              Platform.OS === 'android' && keyboardBottomInset > 0
+                ? Math.max(6, insets.bottom)
+                : Math.max(10, insets.bottom),
+          },
+        ]}
+      >
         <Pressable
           style={styles.attachBtn}
           onPress={openAttachMenu}
@@ -1358,6 +1652,70 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
         </Pressable>
       </View>
     </KeyboardAvoidingView>
+      <AttachmentPreviewModal
+        visible={previewAtt !== null}
+        attachment={previewAtt}
+        authHeaders={authHeaders}
+        onClose={() => setPreviewAtt(null)}
+        onNativeShareReady={(p) => {
+          setPendingNativeShare(p);
+          setPreviewAtt(null);
+        }}
+      />
+      <ForwardChatPickerModal
+        visible={forwardModalVisible}
+        currentChatId={chatId}
+        onClose={closeForwardModal}
+        onSelect={onForwardPickChat}
+      />
+
+      <Modal
+        visible={attachMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAttachMenu}
+        statusBarTranslucent
+      >
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={closeAttachMenu} accessibilityLabel="Закрыть" />
+          <View style={styles.attachMenuWrap} pointerEvents="box-none">
+            <View style={[styles.attachMenuCard, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
+              <Text style={styles.attachMenuTitle}>Прикрепить</Text>
+              <Text style={styles.attachMenuSubtitle}>Выберите тип вложения</Text>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  runAfterAttachMenuClosed(() => void takePhoto());
+                }}
+              >
+                <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Сделать фото</Text>
+              </Pressable>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  runAfterAttachMenuClosed(() => void pickImage());
+                }}
+              >
+                <Ionicons name="images-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Фото из галереи</Text>
+              </Pressable>
+              <Pressable
+                style={styles.attachMenuRow}
+                onPress={() => {
+                  runAfterAttachMenuClosed(() => void pickFile());
+                }}
+              >
+                <Ionicons name="document-outline" size={22} color={colors.primary} />
+                <Text style={styles.attachMenuRowText}>Файл</Text>
+              </Pressable>
+              <Pressable style={styles.attachMenuCancel} onPress={closeAttachMenu}>
+                <Text style={styles.attachMenuCancelText}>Отмена</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1368,6 +1726,8 @@ function createChatRoomStyles(colors: ThemeColors, radii: ThemeRadii) {
   return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   keyboardFlex: { flex: 1 },
+  /** Чтобы список не перекрывал полосу ввода по hit-testing (особенно Android). */
+  chatListFlex: { flex: 1 },
   listLoader: {
     flex: 1,
     justifyContent: 'center',
@@ -1375,7 +1735,7 @@ function createChatRoomStyles(colors: ThemeColors, radii: ThemeRadii) {
     paddingVertical: 48,
   },
   listLoaderTxt: { marginTop: 12, fontSize: 15, color: colors.muted },
-  hiddenList: { opacity: 0 },
+  hiddenList: { opacity: 0, pointerEvents: 'none' },
   modalRoot: {
     flex: 1,
   },
@@ -1498,44 +1858,137 @@ function createChatRoomStyles(colors: ThemeColors, radii: ThemeRadii) {
   msgRowMine: {
     justifyContent: 'flex-end',
   },
-  /** Мини-блок «ответ на…» внутри пузыря (как в Telegram) */
-  replyQuote: {
-    flexDirection: 'row',
-    borderRadius: radii.sm,
-    overflow: 'hidden',
-    marginBottom: 8,
-    maxWidth: '100%',
+  msgAvatarSlot: {
+    width: 34,
+    marginRight: 8,
+    alignSelf: 'flex-end',
+    marginBottom: 4,
   },
-  replyQuoteMine: {
-    backgroundColor: 'rgba(255,255,255,0.45)',
+  msgAvatarMineSlot: {
+    width: 34,
+    marginLeft: 8,
+    alignSelf: 'flex-end',
+    marginBottom: 4,
   },
-  replyQuoteOther: {
+  msgAvatarPhoto: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
     backgroundColor: colors.chip,
   },
-  replyQuoteAccent: {
-    width: 3,
+  msgAvatarPhotoMine: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.chip,
+  },
+  msgAvatarInitialsOther: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.chip,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  msgAvatarInitialsOtherText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  msgAvatarInitialsMine: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
     backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  msgAvatarInitialsMineText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
+  /** Мини-блок «ответ на…»: полоска absolute с отступом сверху/снизу — без «лишней» высоты flex-row. */
+  replyQuote: {
+    position: 'relative',
+    borderRadius: radii.sm,
+    overflow: 'hidden',
+    marginBottom: 6,
+    maxWidth: '100%',
+    paddingVertical: 4,
+    paddingRight: 8,
+    paddingLeft: 11,
+  },
+  replyQuoteMine: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.chatMineBorder,
+  },
+  replyQuoteOther: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.chatOtherBorder,
+  },
+  replyQuoteAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 5,
+    bottom: 5,
+    width: 3,
     borderRadius: 2,
+    backgroundColor: colors.primary,
   },
   replyQuoteAccentMine: {
     backgroundColor: colors.link,
   },
   replyQuoteBody: {
-    flex: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    paddingLeft: 5,
     minWidth: 0,
   },
   replyQuoteName: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: colors.primary,
-    marginBottom: 2,
+    marginBottom: 1,
   },
   replyQuotePreview: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    color: colors.text,
+    opacity: 0.75,
+  },
+  /** Полоска «переслано от кого / из какого чата» (первая строка buildForwardContent). */
+  forwardStrip: {
+    borderRadius: radii.sm,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginBottom: 6,
+    maxWidth: '100%',
+  },
+  forwardStripMine: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.chatMineBorder,
+  },
+  forwardStripOther: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.chatOtherBorder,
+  },
+  forwardStripText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: colors.text,
+    opacity: 0.78,
   },
   bubble: {
     maxWidth: '82%',
@@ -1689,6 +2142,11 @@ function createChatRoomStyles(colors: ThemeColors, radii: ThemeRadii) {
     borderColor: colors.border,
     backgroundColor: colors.card,
     gap: 2,
+    zIndex: 2,
+    ...Platform.select({
+      android: { elevation: 8 },
+      default: {},
+    }),
   },
   /** Одна высота с полем ввода — без «плавающих» margin */
   attachBtn: {

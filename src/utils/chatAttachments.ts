@@ -19,7 +19,15 @@ export function parseAttachments(raw: unknown): ChatAttachment[] {
       return [];
     }
   }
-  if (Array.isArray(raw)) return raw as ChatAttachment[];
+  if (Array.isArray(raw)) {
+    if (raw.length > 0 && typeof raw[0] === 'string') {
+      return (raw as string[])
+        .map((s) => String(s).trim())
+        .filter(Boolean)
+        .map((id) => ({ id } as ChatAttachment));
+    }
+    return raw as ChatAttachment[];
+  }
   return [];
 }
 
