@@ -15,13 +15,21 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { paddingTopUnderStatusBar, useTabScrollBottomPadding } from '../../lib/screenInsets';
-import { Chat, ChatMessage, cursorFromUrl, fetchChats, fetchMessages } from '../../api/chatsApi';
+import {
+  Chat,
+  ChatMessage,
+  cursorFromUrl,
+  fetchChats,
+  fetchMessages,
+  markChatRead,
+} from '../../api/chatsApi';
 import {
   applyLocalReadToChats,
   extractChatLastPreview,
   extractChatLastMessageAt,
   hydrateLocalReadChats,
   markChatLocallyRead,
+  shouldSyncChatReadOnServer,
   unreadCountNumber,
 } from '../../lib/chatUnread';
 import { prefetchChatRoom } from '../../lib/chatRoomPrefetch';
@@ -150,7 +158,18 @@ export default function ChatsListScreen({ navigation }: Props) {
   const loadInitial = useCallback(async () => {
     await hydrateLocalReadChats();
     const res = await fetchChats({ page_size: 30 });
-    const normalized = applyLocalReadToChats(res.results ?? []);
+    const rawChats = res.results ?? [];
+    const normalized = applyLocalReadToChats(rawChats);
+    const chatsToSync = rawChats.filter((chat) => shouldSyncChatReadOnServer(chat));
+    if (chatsToSync.length > 0) {
+      await Promise.allSettled(
+        chatsToSync.map((chat) => {
+          const id = String((chat as Record<string, unknown>)._id ?? '').trim();
+          if (!id) return Promise.resolve();
+          return markChatRead(id);
+        })
+      );
+    }
     const enriched = await enrichChatsWithActualLastMessage(normalized).catch(() => normalized);
     setItems(enriched);
     setNextCursor(cursorFromUrl(res.next ?? null));

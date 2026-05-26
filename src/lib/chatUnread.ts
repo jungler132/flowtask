@@ -7,7 +7,7 @@ let hydrated = false;
 let hydratePromise: Promise<void> | null = null;
 
 /** Допуск между last_message_at и created_at / разными полями ответа. */
-const READ_AT_FIELD_SLOP_MS = 15000;
+const READ_AT_FIELD_SLOP_MS = 1000;
 
 function mergeReadAtIntoMap(id: string, value: number) {
   if (!id || !Number.isFinite(value) || value <= 0) return;
@@ -142,9 +142,10 @@ export function applyLocalReadToChat(chat: Chat): Chat {
   const readAt = localReadWatermark(chat);
   if (readAt == null) return chat;
   const lastAt = extractChatLastMessageAt(chat);
-  // Уже заходили в чат: без времени последнего сообщения в объекте не показываем «хвост» с API.
+  // Если сервер не прислал время последнего сообщения, нельзя безопасно обнулять unread:
+  // иначе можно скрыть реально новое сообщение.
   if (lastAt <= 0) {
-    return { ...chat, unread_count: 0 };
+    return chat;
   }
   if (lastAt <= readAt + READ_AT_FIELD_SLOP_MS) {
     return { ...chat, unread_count: 0 };
@@ -154,4 +155,23 @@ export function applyLocalReadToChat(chat: Chat): Chat {
 
 export function applyLocalReadToChats(chats: Chat[]): Chat[] {
   return chats.map((c) => applyLocalReadToChat(c));
+}
+
+/**
+ * Нужна ли синхронизация read-статуса на сервер:
+ * локально чат уже считается прочитанным, а сервер всё ещё отдаёт unread_count > 0.
+ */
+export function shouldSyncChatReadOnServer(chat: Chat): boolean {
+  const unread = unreadCountNumber((chat as Record<string, unknown>).unread_count);
+  if (unread <= 0) return false;
+
+  const readAt = localReadWatermark(chat);
+  if (readAt == null) return false;
+
+  const lastAt = extractChatLastMessageAt(chat);
+  // Если сервер не отдал время последнего сообщения, нельзя безопасно решать,
+  // что чат уже прочитан: иначе можно "съесть" реальный unread.
+  if (lastAt <= 0) return false;
+
+  return lastAt <= readAt + READ_AT_FIELD_SLOP_MS;
 }

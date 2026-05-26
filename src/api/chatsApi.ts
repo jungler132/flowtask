@@ -173,6 +173,11 @@ export async function sendMessage(chatId: string, body: Record<string, unknown>)
   });
 }
 
+/**
+ * OpenAPI: POST /api/chats/{chat_id}/messages/mark-read/
+ * Тело по схеме `ChatMessageRequest`: обязательно поле `content` (minLength 1).
+ * См. https://flowtask220.ru/api/schema/ → chats_messages_mark_read_create
+ */
 export async function markChatRead(chatId: string) {
   const cid = chatPathId(chatId);
   return apiFetch(`/api/chats/${cid}/messages/mark-read/`, {

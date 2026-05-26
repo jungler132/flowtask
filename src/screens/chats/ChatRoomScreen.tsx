@@ -876,6 +876,24 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     });
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const onShow = (e: { endCoordinates?: { height?: number } }) => {
+      const raw = Number(e?.endCoordinates?.height ?? 0);
+      const height = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+      requestAnimationFrame(() => setKeyboardBottomInset(height));
+    };
+    const onHide = () => {
+      requestAnimationFrame(() => setKeyboardBottomInset(0));
+    };
+    const s1 = Keyboard.addListener('keyboardDidShow', onShow);
+    const s2 = Keyboard.addListener('keyboardDidHide', onHide);
+    return () => {
+      s1.remove();
+      s2.remove();
+    };
+  }, []);
+
   const load = useCallback(async () => {
     const res = await fetchMessages(chatId, { page_size: 50, ordering: '-created_at' });
     const raw = sortMessagesAsc(res.results ?? []);
@@ -981,23 +999,6 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     });
     return () => sub.remove();
   }, [initialLoad, chatId, refreshLatestMessages]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const onShow = (e: { endCoordinates: { height: number } }) => {
-      const h = e.endCoordinates.height;
-      requestAnimationFrame(() => setKeyboardBottomInset(h));
-    };
-    const onHide = () => {
-      requestAnimationFrame(() => setKeyboardBottomInset(0));
-    };
-    const s1 = Keyboard.addListener('keyboardDidShow', onShow);
-    const s2 = Keyboard.addListener('keyboardDidHide', onHide);
-    return () => {
-      s1.remove();
-      s2.remove();
-    };
-  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -1414,36 +1415,15 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     if (e.nativeEvent.shiftKey) return;
     if (Platform.OS === 'web') onSend();
   }
-  /*
-   * Android — откуда берётся «блок» и геп над клавиатурой:
-   *
-   * • Корневой `View` — ниже `paddingBottom: androidKbRootPad` (доля от высоты IME).
-   * • `KeyboardAvoidingView` — `transform: translateY(-androidKbCompensateY)` (доля ANDROID_KB_TRANSLATE_RATIO).
-   * • Полоса с полем ввода — `View` с `styles.footer` + инлайн `paddingBottom` при открытой клаве.
-   * • Высота полосы ещё в `createChatRoomStyles`: `footer.paddingVertical`, `input.minHeight`, кнопки 44×44.
-   *
-   * Коэффициенты не опускаются ниже 0.0001 (чтобы случайно не умножить на 0).
-   */
-  const ANDROID_KB_ROOT_PAD_RATIO = Math.max(0.0001, 1);
-  const ANDROID_KB_TRANSLATE_RATIO = Math.max(0.0001, 0.9);
-  const androidKbInset = Platform.OS === 'android' ? keyboardBottomInset : 0;
-  const androidKbRootPad =
-    androidKbInset > 0 ? Math.max(1, Math.round(androidKbInset * ANDROID_KB_ROOT_PAD_RATIO)) : 0;
-  const androidKbCompensateY =
-    androidKbInset > 0
-      ? Math.min(
-          Math.floor(androidKbInset * ANDROID_KB_TRANSLATE_RATIO),
-          Math.max(0, androidKbInset - 6)
-        )
+  const androidKeyboardSpacer =
+    Platform.OS === 'android' && keyboardBottomInset > 0
+      ? Math.max(0, keyboardBottomInset - insets.bottom)
       : 0;
 
   return (
-    <View style={[styles.root, androidKbRootPad > 0 && { paddingBottom: androidKbRootPad }]}>
+    <View style={styles.root}>
     <KeyboardAvoidingView
-      style={[
-        styles.keyboardFlex,
-        androidKbCompensateY > 0 && { transform: [{ translateY: -androidKbCompensateY }] },
-      ]}
+      style={styles.keyboardFlex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       enabled={Platform.OS === 'ios'}
       keyboardVerticalOffset={headerHeight}
@@ -1611,9 +1591,7 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           styles.footer,
           {
             paddingBottom:
-              Platform.OS === 'android' && keyboardBottomInset > 0
-                ? Math.max(6, insets.bottom)
-                : Math.max(10, insets.bottom),
+              Platform.OS === 'android' ? Math.max(10, insets.bottom) : Math.max(10, insets.bottom),
           },
         ]}
       >
@@ -1651,6 +1629,9 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
           )}
         </Pressable>
       </View>
+      {Platform.OS === 'android' && androidKeyboardSpacer > 0 ? (
+        <View style={{ height: androidKeyboardSpacer }} />
+      ) : null}
     </KeyboardAvoidingView>
       <AttachmentPreviewModal
         visible={previewAtt !== null}

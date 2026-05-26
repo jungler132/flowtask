@@ -18,13 +18,15 @@ import {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { fetchChats } from '../api/chatsApi';
+import { fetchChats, fetchMessages, markChatRead } from '../api/chatsApi';
 import { fetchTasksPage } from '../api/tasksApi';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 import {
   applyLocalReadToChats,
+  extractChatLastMessageAt,
   hydrateLocalReadChats,
+  shouldSyncChatReadOnServer,
   unreadCountNumber,
 } from '../lib/chatUnread';
 import { TAB_BAR_FLOAT_BOTTOM_DP } from '../lib/screenInsets';
@@ -202,7 +204,38 @@ function MainTabs() {
       try {
         await hydrateLocalReadChats();
         const chatRes = await fetchChats({ page_size: 100 });
-        const normalizedChats = applyLocalReadToChats(chatRes.results ?? []);
+        const rawChats = chatRes.results ?? [];
+        const rawChatsWithResolvedLastAt = await Promise.all(
+          rawChats.map(async (chat) => {
+            const unread = unreadCountNumber((chat as Record<string, unknown>).unread_count);
+            const hasLastAt = extractChatLastMessageAt(chat) > 0;
+            if (unread <= 0 || hasLastAt) return chat;
+            const chatId = String((chat as Record<string, unknown>)._id ?? '').trim();
+            if (!chatId) return chat;
+            try {
+              const res = await fetchMessages(chatId, { page_size: 1, ordering: '-created_at' });
+              const latest = (res.results ?? [])[0] as Record<string, unknown> | undefined;
+              const createdAt = String(latest?.created_at ?? '').trim();
+              if (!createdAt) return chat;
+              return { ...(chat as Record<string, unknown>), last_message_created_at: createdAt };
+            } catch {
+              return chat;
+            }
+          })
+        );
+        const normalizedChats = applyLocalReadToChats(rawChatsWithResolvedLastAt);
+        const chatsToSync = rawChatsWithResolvedLastAt.filter((chat) =>
+          shouldSyncChatReadOnServer(chat)
+        );
+        if (chatsToSync.length > 0) {
+          await Promise.allSettled(
+            chatsToSync.map((chat) => {
+              const id = String((chat as Record<string, unknown>)._id ?? '').trim();
+              if (!id) return Promise.resolve();
+              return markChatRead(id);
+            })
+          );
+        }
         const unreadChats = normalizedChats.reduce(
           (sum, chat) => sum + unreadCountNumber(chat.unread_count),
           0
@@ -244,6 +277,7 @@ function MainTabs() {
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.muted,
         tabBarShowLabel: true,
+        tabBarHideOnKeyboard: true,
         tabBarItemStyle: {
           flex: 1,
           minWidth: 0,
