@@ -9,20 +9,29 @@ import React, {
 } from 'react';
 import {
   fetchMe,
+  loginWithPassword,
+  LoginResult,
   logoutApi,
   sendOtp,
+  setPasswordWithToken,
   UserProfile,
-  verifyOtp,
+  verifyOtpForPassword,
 } from '../api/authApi';
-import { clearTokens, getAccessToken } from '../lib/storage';
+import { clearTokens, getAccessToken, saveTokens } from '../lib/storage';
 import { extractUserAvatarUrl } from '../utils/userAvatar';
 
 type AuthState = {
   user: UserProfile | null;
   loading: boolean;
   ready: boolean;
-  sendCode: (email: string, useReserve?: boolean) => Promise<unknown>;
-  confirmCode: (email: string, code: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  sendOtpCode: (email: string) => ReturnType<typeof sendOtp>;
+  verifyOtpCode: (email: string, code: string) => Promise<string>;
+  completePasswordSetup: (
+    changeToken: string,
+    password: string,
+    confirmPassword: string
+  ) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: (mergeFromPatch?: UserProfile | null) => Promise<void>;
 };
@@ -81,15 +90,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refreshProfile]);
 
-  const sendCode = useCallback(
-    (email: string, useReserve?: boolean) => sendOtp(email, useReserve),
+  const login = useCallback(async (email: string, password: string) => {
+    const result = await loginWithPassword(email, password);
+    if (result.status === 'AUTHENTICATED') {
+      await saveTokens(result.access, result.refresh);
+      await refreshProfile();
+    }
+    return result;
+  }, [refreshProfile]);
+
+  const sendOtpCode = useCallback((email: string) => sendOtp(email), []);
+
+  const verifyOtpCode = useCallback(
+    (email: string, code: string) => verifyOtpForPassword(email, code.trim()),
     []
   );
 
-  const confirmCode = useCallback(async (email: string, code: string) => {
-    await verifyOtp(email, code.trim());
-    await refreshProfile();
-  }, [refreshProfile]);
+  const completePasswordSetup = useCallback(
+    async (changeToken: string, password: string, confirmPassword: string) => {
+      await setPasswordWithToken(changeToken, password, confirmPassword);
+      await refreshProfile();
+    },
+    [refreshProfile]
+  );
 
   const signOut = useCallback(async () => {
     await logoutApi();
@@ -102,12 +125,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       loading,
       ready,
-      sendCode,
-      confirmCode,
+      login,
+      sendOtpCode,
+      verifyOtpCode,
+      completePasswordSetup,
       signOut,
       refreshProfile,
     }),
-    [user, loading, ready, sendCode, confirmCode, signOut, refreshProfile]
+    [
+      user,
+      loading,
+      ready,
+      login,
+      sendOtpCode,
+      verifyOtpCode,
+      completePasswordSetup,
+      signOut,
+      refreshProfile,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

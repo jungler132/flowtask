@@ -1,18 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
-  registerForPushNotificationsAndSync,
   clearPushRegistration,
-  ensureAndroidNotificationChannel,
+  ensureAndroidNotificationChannels,
   initPushHandlers,
+  registerForPushNotificationsAndSync,
   setupPushListeners,
 } from '../lib/pushNotifications';
 import { rootNavigationRef } from '../navigation/rootNavigationRef';
 
 /**
- * Инициализация push: разрешения, канал Android, регистрация токена после входа,
- * переход по тапу на уведомление (задача / чат).
- * Нативный модуль подключается через dynamic import — без него приложение не падает.
+ * Push (FCM): разрешения, каналы Android, регистрация токена после входа,
+ * переход по тапу (задача / чат / новости) — см. newapiflowtask § notifications.
  */
 export function PushNotificationRoot() {
   const { user } = useAuth();
@@ -38,7 +37,7 @@ export function PushNotificationRoot() {
   }, []);
 
   useEffect(() => {
-    ensureAndroidNotificationChannel().catch(() => {});
+    ensureAndroidNotificationChannels().catch(() => {});
   }, []);
 
   useEffect(() => {

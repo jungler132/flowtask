@@ -2,7 +2,12 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type AuthStackParamList = {
   Login: undefined;
-  Verify: { email: string; hint?: string };
+  Verify: { email: string; hint?: string; mode?: 'setup_password' };
+  SetPassword: {
+    email: string;
+    changeToken: string;
+    reason: 'first_setup' | 'must_change';
+  };
 };
 
 export type TasksStackParamList = {
@@ -19,6 +24,10 @@ export type TasksStackParamList = {
 export type ProfileStackParamList = {
   ProfileMain: undefined;
   TaskPasswordReset: undefined;
+  EquipmentList: undefined;
+  EquipmentDetail: { equipmentId: string };
+  EquipmentForm: { equipmentId?: string };
+  EquipmentQr: undefined;
 };
 
 export type ChatsStackParamList = {

@@ -22,6 +22,7 @@ import { getAccessToken } from '../lib/storage';
 import { useTabScrollBottomPadding } from '../lib/screenInsets';
 import { extractUserAvatarUrl } from '../utils/userAvatar';
 import { useAuth } from '../context/AuthContext';
+import { canManageEquipment } from '../lib/equipmentAccess';
 import { useTheme, type ThemeMode } from '../context/ThemeContext';
 import type { ProfileStackParamList } from '../navigation/types';
 import type { ThemeColors } from '../theme';
@@ -250,6 +251,21 @@ function createProfileStyles(
       fontSize: 16,
       lineHeight: 24,
     },
+    equipCard: {
+      backgroundColor: colors.card,
+      borderRadius: radii.lg,
+      padding: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 16,
+      ...shadowCard,
+    },
+    equipTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 10,
+    },
     btn: {
       marginTop: 4,
       backgroundColor: colors.primary,
@@ -401,6 +417,7 @@ export default function ProfileScreen({ navigation }: Props) {
   const nameLine = formatValue(user.full_name) || 'Пользователь';
   const emailLine = formatValue(user.email);
   const roleLine = roleLabel(user.role);
+  const showEquipment = canManageEquipment(user);
 
   return (
     <ScrollView
@@ -495,6 +512,15 @@ export default function ProfileScreen({ navigation }: Props) {
           </View>
         ))}
       </View>
+
+      {showEquipment ? (
+        <Pressable style={styles.equipCard} onPress={() => navigation.navigate('EquipmentList')}>
+          <Text style={styles.equipTitle}>Оборудование IT</Text>
+          <Text style={styles.helpHint}>
+            Список, создание и редактирование техники, поиск по QR. Доступно администраторам и IT-службе.
+          </Text>
+        </Pressable>
+      ) : null}
 
       <Pressable
         style={styles.helpCard}

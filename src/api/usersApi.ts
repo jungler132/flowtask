@@ -81,13 +81,36 @@ export async function fetchUser(userId: string): Promise<UserDetail> {
   return apiFetch<UserDetail>(`/api/users/${id}/`);
 }
 
+/** GET /api/users/search/ — поиск по email (первый вход) или q (HR/Admin). */
+export async function searchUsers(
+  params: { search?: string; q?: string; page?: number; limit?: number } = {}
+): Promise<UserListItem[]> {
+  const term = (params.search ?? params.q ?? '').trim();
+  const raw = await apiFetch<unknown>(
+    `/api/users/search/${qsUsers({
+      search: term || undefined,
+      page: params.page,
+      limit: params.limit ?? 40,
+    })}`
+  );
+  return normalizeUsersListResponse(raw);
+}
+
+/** GET /api/users/stats/ */
+export async function fetchUsersStats(): Promise<Record<string, unknown>> {
+  return apiFetch<Record<string, unknown>>('/api/users/stats/');
+}
+
 /** GET /api/users/ — список с поиском (параметр search в OpenAPI). */
 export async function fetchUsersList(
   params: { search?: string; page?: number; limit?: number } = {}
 ): Promise<UserListItem[]> {
+  const term = params.search?.trim();
+  if (term) {
+    return searchUsers({ search: term, page: params.page, limit: params.limit });
+  }
   const raw = await apiFetch<unknown>(
     `/api/users/${qsUsers({
-      search: params.search,
       page: params.page,
       limit: params.limit ?? 40,
     })}`

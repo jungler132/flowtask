@@ -15,7 +15,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": ["remote-notification"],
+        "NSCameraUsageDescription": "Камера нужна для сканирования QR-кодов на оборудовании."
       }
     },
     "android": {
@@ -37,6 +38,13 @@
         {
           "photosPermission": "Доступ к фото, чтобы отправлять изображения в чат.",
           "cameraPermission": "Камера для съёмки фото в чат."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Камера нужна для сканирования QR-кодов на оборудовании.",
+          "recordAudioAndroid": false
         }
       ],
       [

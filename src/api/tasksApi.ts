@@ -148,6 +148,51 @@ export async function fetchTasksAll() {
   return normalizeTaskList(data);
 }
 
+/** GET /api/tasks/department/ */
+export async function fetchTasksDepartment() {
+  const data = await apiFetch('/api/tasks/department/');
+  return normalizeTaskList(data);
+}
+
+/** GET /api/tasks/observing/ */
+export async function fetchTasksObserving() {
+  const data = await apiFetch('/api/tasks/observing/');
+  return normalizeTaskList(data);
+}
+
+type TaskAction =
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'reopen'
+  | 'refuse-execution'
+  | 'take-department-task';
+
+/** POST /api/tasks/{id}/<action>/ (newapiflowtask). */
+export async function postTaskAction(
+  id: string | number,
+  action: TaskAction,
+  body: Record<string, unknown> = {}
+) {
+  return apiFetch<Task>(`/api/tasks/${id}/${action}/`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export const startTask = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'start', body);
+export const pauseTask = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'pause', body);
+export const resumeTask = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'resume', body);
+export const reopenTask = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'reopen', body);
+export const refuseTaskExecution = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'refuse-execution', body);
+export const takeDepartmentTask = (id: string | number, body?: Record<string, unknown>) =>
+  postTaskAction(id, 'take-department-task', body);
+
 export async function fetchTask(id: string | number) {
   return apiFetch<Task>(`/api/tasks/${id}/`);
 }

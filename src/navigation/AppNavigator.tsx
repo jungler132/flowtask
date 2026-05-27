@@ -39,6 +39,7 @@ import {
 } from './types';
 import LoginScreen from '../screens/auth/LoginScreen';
 import VerifyScreen from '../screens/auth/VerifyScreen';
+import SetPasswordScreen from '../screens/auth/SetPasswordScreen';
 import TasksHomeScreen from '../screens/tasks/TasksHomeScreen';
 import TaskDetailScreen from '../screens/tasks/TaskDetailScreen';
 import TaskFormScreen from '../screens/tasks/TaskFormScreen';
@@ -55,6 +56,10 @@ import ChatFromTaskScreen from '../screens/chats/ChatFromTaskScreen';
 import ChatSearchScreen from '../screens/chats/ChatSearchScreen';
 import ChatManageScreen from '../screens/chats/ChatManageScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import EquipmentListScreen from '../screens/equipment/EquipmentListScreen';
+import EquipmentDetailScreen from '../screens/equipment/EquipmentDetailScreen';
+import EquipmentFormScreen from '../screens/equipment/EquipmentFormScreen';
+import EquipmentQrScreen from '../screens/equipment/EquipmentQrScreen';
 import NewsScreen from '../screens/NewsScreen';
 import { PushNotificationRoot } from '../components/PushNotificationRoot';
 import { rootNavigationRef } from './rootNavigationRef';
@@ -158,6 +163,26 @@ function ProfileNavigator() {
         name="TaskPasswordReset"
         component={TaskPasswordResetScreen}
         options={{ title: 'Пароль от почты' }}
+      />
+      <ProfileStack.Screen
+        name="EquipmentList"
+        component={EquipmentListScreen}
+        options={{ title: 'Оборудование' }}
+      />
+      <ProfileStack.Screen
+        name="EquipmentDetail"
+        component={EquipmentDetailScreen}
+        options={{ title: 'Оборудование' }}
+      />
+      <ProfileStack.Screen
+        name="EquipmentForm"
+        component={EquipmentFormScreen}
+        options={{ title: 'Оборудование' }}
+      />
+      <ProfileStack.Screen
+        name="EquipmentQr"
+        component={EquipmentQrScreen}
+        options={{ title: 'Скан QR' }}
       />
     </ProfileStack.Navigator>
   );
@@ -358,6 +383,11 @@ function AuthNavigator() {
     <AuthStack.Navigator detachInactiveScreens={false} screenOptions={stackScreenOptions}>
       <AuthStack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
       <AuthStack.Screen name="Verify" component={VerifyScreen} options={{ title: 'Код из письма' }} />
+      <AuthStack.Screen
+        name="SetPassword"
+        component={SetPasswordScreen}
+        options={{ title: 'Пароль' }}
+      />
     </AuthStack.Navigator>
   );
 }

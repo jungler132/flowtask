@@ -70,6 +70,23 @@ export async function fetchNewsById(id: string | number) {
   return apiFetch<NewsItem>(`/api/news/${encodeURIComponent(String(id))}/`);
 }
 
+/** GET /api/news/active/ */
+export async function fetchActiveNews(params: NewsListParams = {}) {
+  return apiFetch<{
+    count?: number;
+    next?: string | null;
+    results?: NewsItem[];
+  }>(`/api/news/active/${qs(params as Record<string, unknown>)}`);
+}
+
+/** POST /api/news/{id}/mark-read/ */
+export async function markNewsRead(id: string | number) {
+  await apiFetch(`/api/news/${encodeURIComponent(String(id))}/mark-read/`, {
+    method: 'POST',
+    body: '{}',
+  });
+}
+
 export function newsId(n: NewsItem): string {
   return String((n as Record<string, unknown>)._id ?? '').trim();
 }

@@ -15,18 +15,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-import { isValidOtpCode, OTP_LENGTH_HINT } from '../../lib/authValidation';
+import { isStrongEnoughPassword } from '../../lib/authValidation';
 import { useTheme } from '../../context/ThemeContext';
 import { AUTH_SCREEN_PADDING } from '../../lib/screenInsets';
 import { AuthStackParamList } from '../../navigation/types';
 import type { ThemeColors } from '../../theme';
 
-type Props = StackScreenProps<AuthStackParamList, 'Verify'>;
+type Props = StackScreenProps<AuthStackParamList, 'SetPassword'>;
 
 type ThemeLayout = (typeof import('../../theme'))['layout'];
 type ThemeRadii = (typeof import('../../theme'))['radii'];
 
-function createVerifyStyles(colors: ThemeColors, layout: ThemeLayout, radii: ThemeRadii) {
+function createStyles(colors: ThemeColors, layout: ThemeLayout, radii: ThemeRadii) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.bg },
     scroll: { flexGrow: 1, justifyContent: 'center', paddingTop: AUTH_SCREEN_PADDING },
@@ -42,13 +42,6 @@ function createVerifyStyles(colors: ThemeColors, layout: ThemeLayout, radii: The
       fontWeight: '700',
       color: colors.text,
       marginBottom: 10,
-      textAlign: 'center',
-    },
-    hint: {
-      color: colors.primary,
-      marginBottom: 12,
-      fontSize: 16,
-      fontWeight: '600',
       textAlign: 'center',
     },
     subHint: {
@@ -69,15 +62,12 @@ function createVerifyStyles(colors: ThemeColors, layout: ThemeLayout, radii: The
       borderRadius: radii.md,
       paddingHorizontal: 18,
       paddingVertical: 16,
-      minHeight: layout.inputMinHeight + 4,
+      minHeight: layout.inputMinHeight,
       color: colors.text,
-      fontSize: 24,
-      letterSpacing: 6,
-      marginBottom: 24,
+      fontSize: layout.fontSizeInput,
+      marginBottom: 20,
       borderWidth: 1,
       borderColor: colors.border,
-      textAlign: 'center',
-      fontWeight: '600',
     },
     btn: {
       backgroundColor: colors.primary,
@@ -93,32 +83,39 @@ function createVerifyStyles(colors: ThemeColors, layout: ThemeLayout, radii: The
   });
 }
 
-export default function VerifyScreen({ route, navigation }: Props) {
+export default function SetPasswordScreen({ route }: Props) {
   const insets = useSafeAreaInsets();
-  const { email, hint } = route.params;
-  const { verifyOtpCode } = useAuth();
+  const { email, changeToken, reason } = route.params;
+  const { completePasswordSetup } = useAuth();
   const { colors, layout, radii } = useTheme();
-  const styles = useMemo(() => createVerifyStyles(colors, layout, radii), [colors, layout, radii]);
-  const [code, setCode] = useState('');
+  const styles = useMemo(() => createStyles(colors, layout, radii), [colors, layout, radii]);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const title =
+    reason === 'must_change' ? 'Смена временного пароля' : 'Создание пароля';
+  const hint =
+    reason === 'must_change'
+      ? 'Задайте новый постоянный пароль для входа в приложение.'
+      : 'Придумайте пароль для входа в приложение (не короче 8 символов).';
+
   async function onSubmit() {
-    const c = code.trim();
-    if (!isValidOtpCode(c)) {
-      Alert.alert('Некорректный код', OTP_LENGTH_HINT);
+    if (!isStrongEnoughPassword(password)) {
+      Alert.alert('Слабый пароль', 'Пароль должен быть не короче 8 символов.');
       return;
     }
+    if (password !== confirm) {
+      Alert.alert('Пароли не совпадают', 'Повторите ввод в обоих полях.');
+      return;
+    }
+
     setBusy(true);
     try {
-      const changeToken = await verifyOtpCode(email, c);
-      navigation.navigate('SetPassword', {
-        email,
-        changeToken,
-        reason: 'first_setup',
-      });
+      await completePasswordSetup(changeToken, password, confirm);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : String(err);
-      Alert.alert('Ошибка проверки кода', msg);
+      Alert.alert('Не удалось сохранить пароль', msg);
     } finally {
       setBusy(false);
     }
@@ -140,23 +137,35 @@ export default function VerifyScreen({ route, navigation }: Props) {
         ]}
       >
         <View style={styles.card}>
-          <Text style={styles.title}>Код из письма</Text>
-          <Text style={styles.hint}>{email}</Text>
+          <Text style={styles.title}>{title}</Text>
           <Text style={styles.subHint}>
-            {hint ??
-              'Введите 6-значный код. После подтверждения задайте пароль для входа в приложение.'}
+            {email}
+            {'\n\n'}
+            {hint}
           </Text>
 
-          <Text style={styles.fieldLabel}>Код</Text>
+          <Text style={styles.fieldLabel}>Новый пароль</Text>
           <TextInput
             style={styles.input}
-            placeholder="000000"
+            placeholder="Не менее 8 символов"
             placeholderTextColor={colors.muted}
-            keyboardType="number-pad"
-            maxLength={6}
-            value={code}
-            onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))}
-            accessibilityLabel="Код из письма"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+            textContentType="newPassword"
+            autoCapitalize="none"
+          />
+
+          <Text style={styles.fieldLabel}>Повторите пароль</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Ещё раз"
+            placeholderTextColor={colors.muted}
+            secureTextEntry
+            value={confirm}
+            onChangeText={setConfirm}
+            textContentType="newPassword"
+            autoCapitalize="none"
           />
 
           <Pressable
@@ -168,7 +177,7 @@ export default function VerifyScreen({ route, navigation }: Props) {
             {busy ? (
               <ActivityIndicator color={colors.onPrimary} />
             ) : (
-              <Text style={styles.btnText}>Продолжить</Text>
+              <Text style={styles.btnText}>Сохранить и войти</Text>
             )}
           </Pressable>
         </View>

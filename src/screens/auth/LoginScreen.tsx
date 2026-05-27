@@ -13,9 +13,16 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { loginResponseHint } from '../../api/authApi';
+import { otpSendHint } from '../../api/authApi';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
+import {
+  isNonEmptyPassword,
+  isZdravEmail,
+  PASSWORD_REQUIRED_HINT,
+  PASSWORD_SETUP_HINT,
+  ZDRAV_EMAIL_HINT,
+} from '../../lib/authValidation';
 import { useTheme } from '../../context/ThemeContext';
 import { AUTH_SCREEN_PADDING } from '../../lib/screenInsets';
 import { AuthStackParamList } from '../../navigation/types';
@@ -28,15 +35,8 @@ type ThemeRadii = (typeof import('../../theme'))['radii'];
 
 function createLoginStyles(colors: ThemeColors, layout: ThemeLayout, radii: ThemeRadii) {
   return StyleSheet.create({
-    root: {
-      flex: 1,
-      backgroundColor: colors.bg,
-    },
-    scroll: {
-      flexGrow: 1,
-      justifyContent: 'center',
-      paddingTop: AUTH_SCREEN_PADDING,
-    },
+    root: { flex: 1, backgroundColor: colors.bg },
+    scroll: { flexGrow: 1, justifyContent: 'center', paddingTop: AUTH_SCREEN_PADDING },
     card: {
       backgroundColor: colors.card,
       borderRadius: radii.lg,
@@ -83,46 +83,6 @@ function createLoginStyles(colors: ThemeColors, layout: ThemeLayout, radii: Them
       borderWidth: 1,
       borderColor: colors.border,
     },
-    toggleRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 24,
-      minHeight: layout.touchMin,
-      paddingVertical: 8,
-      paddingHorizontal: 4,
-    },
-    toggleRowPressed: { opacity: 0.85 },
-    toggleLabel: {
-      color: colors.text,
-      flex: 1,
-      fontSize: 16,
-      lineHeight: 22,
-      paddingRight: 12,
-      fontWeight: '500',
-    },
-    toggleTrack: {
-      width: 52,
-      height: 32,
-      borderRadius: 16,
-      backgroundColor: colors.border,
-      padding: 3,
-    },
-    toggleTrackOn: { backgroundColor: colors.primary },
-    toggleThumbRow: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    toggleThumbRowOff: { justifyContent: 'flex-start' },
-    toggleThumbRowOn: { justifyContent: 'flex-end' },
-    toggleThumb: {
-      width: 26,
-      height: 26,
-      borderRadius: 13,
-    },
-    toggleOff: { backgroundColor: colors.muted },
-    toggleOn: { backgroundColor: colors.onPrimary },
     btn: {
       backgroundColor: colors.primary,
       paddingVertical: layout.buttonPadV + 2,
@@ -133,22 +93,31 @@ function createLoginStyles(colors: ThemeColors, layout: ThemeLayout, radii: Them
       minHeight: 56,
     },
     btnDisabled: { opacity: 0.65 },
-    btnText: {
-      color: colors.onPrimary,
-      fontWeight: '700',
-      fontSize: layout.fontSizeButton,
-    },
+    btnText: { color: colors.onPrimary, fontWeight: '700', fontSize: layout.fontSizeButton },
+    linkBtn: { marginTop: 16, paddingVertical: 12, alignItems: 'center' },
+    linkText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
   });
 }
 
 export default function LoginScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const { sendCode } = useAuth();
+  const { login, sendOtpCode } = useAuth();
   const { colors, layout, radii } = useTheme();
   const styles = useMemo(() => createLoginStyles(colors, layout, radii), [colors, layout, radii]);
   const [email, setEmail] = useState('');
-  const [reserve, setReserve] = useState(false);
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+
+  async function goToOtpSetup(e: string, hint?: string) {
+    try {
+      const sent = await sendOtpCode(e);
+      const otpHint = otpSendHint(sent) ?? hint;
+      navigation.navigate('Verify', { email: e, hint: otpHint, mode: 'setup_password' });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      Alert.alert('Не удалось отправить код', msg);
+    }
+  }
 
   async function onSubmit() {
     const e = email.trim();
@@ -156,14 +125,49 @@ export default function LoginScreen({ navigation }: Props) {
       Alert.alert('Введите email');
       return;
     }
+    if (!isZdravEmail(e)) {
+      Alert.alert('Некорректный email', ZDRAV_EMAIL_HINT);
+      return;
+    }
+    if (!isNonEmptyPassword(password)) {
+      Alert.alert('Введите пароль', PASSWORD_REQUIRED_HINT);
+      return;
+    }
+
     setBusy(true);
     try {
-      const data = await sendCode(e, reserve);
-      const hint = loginResponseHint(data);
-      navigation.navigate('Verify', { email: e, hint: hint ?? undefined });
+      const result = await login(e, password);
+
+      if (result.status === 'AUTHENTICATED') {
+        return;
+      }
+
+      if (result.status === 'MUST_CHANGE_PASSWORD') {
+        navigation.navigate('SetPassword', {
+          email: e,
+          changeToken: result.changeToken,
+          reason: 'must_change',
+        });
+        return;
+      }
+
+      if (result.status === 'PASSWORD_NOT_SET') {
+        const msg =
+          result.message?.trim() ||
+          'Пароль ещё не задан. На вашу почту должно прийти письмо со ссылкой для создания пароля на сайте. Также можно подтвердить вход кодом из письма.';
+        Alert.alert('Создайте пароль', msg, [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Ввести код из письма',
+            onPress: () => {
+              void goToOtpSetup(e, msg);
+            },
+          },
+        ]);
+      }
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : String(err);
-      Alert.alert('Не удалось отправить код', msg);
+      Alert.alert('Не удалось войти', msg);
     } finally {
       setBusy(false);
     }
@@ -173,7 +177,6 @@ export default function LoginScreen({ navigation }: Props) {
     <KeyboardAvoidingView
       style={[styles.root, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={0}
     >
       <ScrollView
         keyboardShouldPersistTaps="handled"
@@ -189,9 +192,7 @@ export default function LoginScreen({ navigation }: Props) {
           <Text style={styles.kicker}>Здравоохранение Москвы</Text>
           <Text style={styles.title}>Вход в приложение</Text>
           <Text style={styles.hint}>
-            Нужен email в домене @zdrav.mos.ru. Аккаунт должен быть заведён в системе (через HR).
-            {'\n\n'}
-            «Резервная почта» — отправить код на запасной адрес из вашего профиля, если он указан.
+            Аккаунт создаётся один раз на сайте (HR). {PASSWORD_SETUP_HINT}
           </Text>
 
           <Text style={styles.fieldLabel}>Электронная почта</Text>
@@ -204,26 +205,21 @@ export default function LoginScreen({ navigation }: Props) {
             value={email}
             onChangeText={setEmail}
             autoCorrect={false}
+            textContentType="username"
           />
 
-          <Pressable
-            style={({ pressed }) => [styles.toggleRow, pressed && styles.toggleRowPressed]}
-            onPress={() => setReserve((v) => !v)}
-            accessibilityRole="switch"
-            accessibilityState={{ checked: reserve }}
-          >
-            <Text style={styles.toggleLabel}>Отправить код на резервную почту</Text>
-            <View style={[styles.toggleTrack, reserve && styles.toggleTrackOn]}>
-              <View
-                style={[
-                  styles.toggleThumbRow,
-                  reserve ? styles.toggleThumbRowOn : styles.toggleThumbRowOff,
-                ]}
-              >
-                <View style={[styles.toggleThumb, reserve ? styles.toggleOn : styles.toggleOff]} />
-              </View>
-            </View>
-          </Pressable>
+          <Text style={styles.fieldLabel}>Пароль</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Пароль с сайта"
+            placeholderTextColor={colors.muted}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+            textContentType="password"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
 
           <Pressable
             style={[styles.btn, busy && styles.btnDisabled]}
@@ -234,8 +230,23 @@ export default function LoginScreen({ navigation }: Props) {
             {busy ? (
               <ActivityIndicator color={colors.onPrimary} />
             ) : (
-              <Text style={styles.btnText}>Отправить код</Text>
+              <Text style={styles.btnText}>Войти</Text>
             )}
+          </Pressable>
+
+          <Pressable
+            style={styles.linkBtn}
+            onPress={() => {
+              const e = email.trim();
+              if (!e || !isZdravEmail(e)) {
+                Alert.alert('Укажите email', ZDRAV_EMAIL_HINT);
+                return;
+              }
+              void goToOtpSetup(e);
+            }}
+            accessibilityRole="button"
+          >
+            <Text style={styles.linkText}>Первый вход — код из письма</Text>
           </Pressable>
         </View>
       </ScrollView>

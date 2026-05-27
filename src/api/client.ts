@@ -1,5 +1,5 @@
 import { API_BASE } from '../config';
-import { clearTokens, getAccessToken } from '../lib/storage';
+import { clearTokens, getAccessToken, getRefreshToken, saveTokens } from '../lib/storage';
 
 export class ApiError extends Error {
   status: number;
@@ -13,6 +13,15 @@ export class ApiError extends Error {
   }
 }
 
+function fieldErrorText(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const first = value.find((x) => typeof x === 'string' && x.trim());
+    if (typeof first === 'string') return first.trim();
+  }
+  return null;
+}
+
 export function formatErrorMessage(json: unknown, status: number): string {
   if (json && typeof json === 'object') {
     const o = json as Record<string, unknown>;
@@ -24,6 +33,15 @@ export function formatErrorMessage(json: unknown, status: number): string {
     if (typeof o.detail === 'string') return o.detail;
     if (Array.isArray(o.detail)) return JSON.stringify(o.detail);
     if (typeof o.message === 'string') return o.message;
+
+    for (const key of ['otp', 'email', 'password', 'confirm_password', 'change_token', 'non_field_errors']) {
+      const msg = fieldErrorText(o[key]);
+      if (msg) return msg;
+    }
+    for (const value of Object.values(o)) {
+      const msg = fieldErrorText(value);
+      if (msg) return msg;
+    }
   }
   return `Ошибка запроса (${status})`;
 }
@@ -129,15 +147,57 @@ export function parseResponse<T>(json: unknown): T {
   return json as T;
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** POST /api/token/refresh/ (спецификация §3.4, ROTATE_REFRESH_TOKENS). */
+async function refreshAccessToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const refresh = await getRefreshToken();
+    if (!refresh) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/token/refresh/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh }),
+      });
+      const text = await res.text();
+      let json: unknown = null;
+      if (text) {
+        try {
+          json = JSON.parse(text);
+        } catch {
+          return false;
+        }
+      }
+      if (!res.ok) return false;
+
+      const { access, refresh: nextRefresh } = extractTokens(json);
+      await saveTokens(access, nextRefresh ?? refresh);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
 export type FetchOptions = RequestInit & {
   skipAuth?: boolean;
+  /** Внутренний флаг: повтор после refresh, чтобы не зациклиться. */
+  _retriedAfterRefresh?: boolean;
 };
 
-export async function apiFetch<T = unknown>(
+async function performFetch(
   path: string,
-  options: FetchOptions = {}
-): Promise<T> {
-  const { skipAuth, headers: hdr, ...rest } = options;
+  options: FetchOptions
+): Promise<{ res: Response; text: string; json: unknown; parsed: boolean }> {
+  const { skipAuth, headers: hdr, _retriedAfterRefresh: _retry, ...rest } = options;
   const headers = new Headers(hdr);
   const token = skipAuth ? null : await getAccessToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -162,8 +222,34 @@ export async function apiFetch<T = unknown>(
       parsed = false;
     }
   }
+  return { res, text, json, parsed };
+}
 
-  if (res.status === 401) await clearTokens();
+export async function apiFetch<T = unknown>(
+  path: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const { skipAuth, _retriedAfterRefresh } = options;
+  let { res, text, json, parsed } = await performFetch(path, options);
+
+  if (
+    res.status === 401 &&
+    !skipAuth &&
+    !_retriedAfterRefresh &&
+    !path.includes('/api/token/refresh/')
+  ) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      ({ res, text, json, parsed } = await performFetch(path, {
+        ...options,
+        _retriedAfterRefresh: true,
+      }));
+    } else {
+      await clearTokens();
+    }
+  } else if (res.status === 401 && !skipAuth) {
+    await clearTokens();
+  }
 
   if (!res.ok) {
     if (!parsed) {

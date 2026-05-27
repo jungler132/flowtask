@@ -39,6 +39,7 @@ import {
   fetchChats,
   fetchMessages,
   markChatRead,
+  forwardMessage,
   sendMessage,
 } from '../../api/chatsApi';
 import { fetchUser } from '../../api/usersApi';
@@ -1210,7 +1211,6 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
       };
       if (attachmentIds.length) body.attachments = attachmentIds;
       if (replyDraft) {
-        body.reply_to = replyDraft.messageId;
         body.reply_to_id = replyDraft.messageId;
       }
 
@@ -1382,10 +1382,12 @@ export default function ChatRoomScreen({ route, navigation }: Props) {
     try {
       const fromTitle = route.params.title ?? 'Чат';
       const { content } = buildForwardContent(src, senderNames, fromTitle);
-      const body: Record<string, unknown> = { sender_id: senderId, content };
-      const ids = await collectForwardAttachmentIds(src);
-      if (ids.length) body.attachments = ids;
-      await sendMessage(targetChatId, body);
+      const messageId = getMessageId(src);
+      await forwardMessage(chatId, {
+        content,
+        target_chat_id: chatPathId(targetChatId),
+        ...(messageId ? { message_id: messageId } : {}),
+      });
       setForwardTarget(null);
       Alert.alert('Готово', `Сообщение переслано в «${targetTitle}».`, [
         { text: 'ОК' },

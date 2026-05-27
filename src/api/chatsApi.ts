@@ -90,7 +90,7 @@ export async function deleteChat(id: string) {
 
 export async function searchChats(q: string) {
   if (!q.trim()) return [] as Chat[];
-  const data = await apiFetch<unknown>(`/api/chats/search/${qs({ q })}`);
+  const data = await apiFetch<unknown>(`/api/chats/search/${qs({ q: q.trim() })}`);
   if (Array.isArray(data)) return data as Chat[];
   const o = data as Record<string, unknown>;
   if (Array.isArray(o.results)) return o.results as Chat[];
@@ -167,7 +167,53 @@ export async function fetchMessages(
 
 export async function sendMessage(chatId: string, body: Record<string, unknown>) {
   const cid = chatPathId(chatId);
+  const payload = { ...body };
+  if (payload.reply_to != null && payload.reply_to_id == null) {
+    payload.reply_to_id = payload.reply_to;
+    delete payload.reply_to;
+  }
   return apiFetch(`/api/chats/${cid}/messages/`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** PATCH /api/chats/{chat_id}/messages/{id}/ */
+export async function patchMessage(
+  chatId: string,
+  messageId: string,
+  content: string
+) {
+  const cid = chatPathId(chatId);
+  return apiFetch(`/api/chats/${cid}/messages/${encodeURIComponent(messageId)}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content }),
+  });
+}
+
+/** DELETE /api/chats/{chat_id}/messages/{id}/ */
+export async function deleteMessage(chatId: string, messageId: string) {
+  const cid = chatPathId(chatId);
+  await apiFetch(`/api/chats/${cid}/messages/${encodeURIComponent(messageId)}/`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * POST /api/chats/{chat_id}/messages/forward/
+ * Переслать в другой чат (newapiflowtask).
+ */
+export async function forwardMessage(
+  sourceChatId: string,
+  body: {
+    content: string;
+    target_chat_id: string;
+    message_id?: string;
+    mentioned_users?: unknown;
+  }
+) {
+  const cid = chatPathId(sourceChatId);
+  return apiFetch(`/api/chats/${cid}/messages/forward/`, {
     method: 'POST',
     body: JSON.stringify(body),
   });

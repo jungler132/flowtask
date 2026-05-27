@@ -12,7 +12,15 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
-import { fetchTasksCreated, fetchTasksMy, fetchTasksPage, Task } from '../../api/tasksApi';
+import {
+  fetchTasksCreated,
+  fetchTasksDepartment,
+  fetchTasksMy,
+  fetchTasksObserving,
+  fetchTasksPage,
+  fetchTasksUnassigned,
+  Task,
+} from '../../api/tasksApi';
 import { HeaderOutlineButton, HeaderRow } from '../../components/HeaderActions';
 import { useTheme } from '../../context/ThemeContext';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
@@ -29,7 +37,7 @@ import {
 
 type Props = StackScreenProps<TasksStackParamList, 'TasksHome'>;
 
-type Segment = 'my' | 'created' | 'all';
+type Segment = 'my' | 'created' | 'all' | 'department' | 'observing' | 'unassigned';
 
 type ThemeRadii = (typeof import('../../theme'))['radii'];
 
@@ -50,10 +58,13 @@ function createTasksHomeStyles(
     },
     segmentRow: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 6,
     },
     segmentChip: {
-      flex: 1,
+      flexGrow: 1,
+      flexBasis: '30%',
+      minWidth: 96,
       paddingVertical: 8,
       paddingHorizontal: 6,
       borderRadius: radii.sm,
@@ -205,8 +216,20 @@ export default function TasksHomeScreen({ navigation }: Props) {
         } else if (segment === 'my') {
           setItems(await fetchTasksMy());
           setHasMore(false);
-        } else {
+        } else if (segment === 'created') {
           setItems(await fetchTasksCreated());
+          setHasMore(false);
+        } else if (segment === 'department') {
+          setItems(await fetchTasksDepartment());
+          setHasMore(false);
+        } else if (segment === 'observing') {
+          setItems(await fetchTasksObserving());
+          setHasMore(false);
+        } else if (segment === 'unassigned') {
+          setItems(await fetchTasksUnassigned());
+          setHasMore(false);
+        } else {
+          setItems([]);
           setHasMore(false);
         }
       } finally {
@@ -253,6 +276,9 @@ export default function TasksHomeScreen({ navigation }: Props) {
     { key: 'all', label: 'Все' },
     { key: 'my', label: 'Мои' },
     { key: 'created', label: 'Созданные' },
+    { key: 'department', label: 'Подразделение' },
+    { key: 'observing', label: 'Наблюдаю' },
+    { key: 'unassigned', label: 'Без исполн.' },
   ];
 
   const listHeader = (
