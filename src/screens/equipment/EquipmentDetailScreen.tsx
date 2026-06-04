@@ -11,14 +11,11 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { formatApiErrorForUser } from '../../api/client';
-import {
-  deleteEquipment,
-  equipmentId,
-  fetchEquipment,
-  type Equipment,
-} from '../../api/equipmentApi';
+import { deleteEquipment, fetchEquipment, type Equipment } from '../../api/equipmentApi';
 import { HeaderOutlineButton, HeaderRow } from '../../components/HeaderActions';
 import { useTheme } from '../../context/ThemeContext';
+import EquipmentQrModal from '../../components/equipment/EquipmentQrModal';
+import { equipmentQrCaptionFrom } from '../../lib/equipmentQr';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import type { ProfileStackParamList } from '../../navigation/types';
 import type { ThemeColors } from '../../theme';
@@ -111,6 +108,16 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
       alignItems: 'center',
     },
     dangerText: { color: colors.danger, fontWeight: '700', fontSize: 16 },
+    qrBtn: {
+      marginBottom: 12,
+      paddingVertical: 14,
+      borderRadius: radii.md,
+      borderWidth: 2,
+      borderColor: colors.primary,
+      alignItems: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    qrBtnText: { color: colors.primary, fontWeight: '700', fontSize: 16 },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   });
 }
@@ -123,14 +130,13 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
   const [eq, setEq] = useState<Equipment | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const data = await fetchEquipment(id);
       setEq(data);
-      const title = line(data.model_name) || `Оборудование #${equipmentId(data) || id}`;
-      navigation.setOptions({ title });
     } catch (e) {
       Alert.alert('Ошибка', formatApiErrorForUser(e), [
         { text: 'Назад', onPress: () => navigation.goBack() },
@@ -145,7 +151,16 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
   }, [reload]);
 
   useEffect(() => {
+    if (route.params.showQrModal) {
+      setQrModalOpen(true);
+      navigation.setParams({ showQrModal: undefined });
+    }
+  }, [route.params.showQrModal, navigation]);
+
+  useEffect(() => {
     navigation.setOptions({
+      title: '',
+      headerTitle: () => null,
       headerRight: () => (
         <HeaderRow>
           <HeaderOutlineButton
@@ -172,7 +187,7 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
     setDeleting(true);
     try {
       await deleteEquipment(id);
-      navigation.goBack();
+      navigation.navigate('EquipmentList', { deletedId: String(id) });
     } catch (e) {
       Alert.alert('Ошибка', formatApiErrorForUser(e));
     } finally {
@@ -197,8 +212,11 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
   }
 
   const rows = fieldsFrom(eq);
+  const qrId = line(eq.qr_id);
+  const qrCaption = qrId ? equipmentQrCaptionFrom(eq as Record<string, unknown>, qrId) : null;
 
   return (
+    <>
     <ScrollView style={styles.root} contentContainerStyle={[styles.content, { paddingBottom: tabScrollBottom }]}>
       <View style={styles.card}>
         <Text style={styles.title}>{line(eq.model_name) || `№ ${id}`}</Text>
@@ -218,6 +236,12 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
         ))}
       </View>
 
+      {qrCaption ? (
+        <Pressable style={styles.qrBtn} onPress={() => setQrModalOpen(true)}>
+          <Text style={styles.qrBtnText}>QR-код · поделиться или сохранить</Text>
+        </Pressable>
+      ) : null}
+
       <Pressable
         style={[styles.danger, deleting && { opacity: 0.6 }]}
         onPress={confirmDelete}
@@ -230,5 +254,12 @@ export default function EquipmentDetailScreen({ route, navigation }: Props) {
         )}
       </Pressable>
     </ScrollView>
+
+    <EquipmentQrModal
+      visible={qrModalOpen}
+      caption={qrCaption}
+      onClose={() => setQrModalOpen(false)}
+    />
+    </>
   );
 }

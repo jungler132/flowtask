@@ -251,20 +251,20 @@ function createProfileStyles(
       fontSize: 16,
       lineHeight: 24,
     },
-    equipCard: {
-      backgroundColor: colors.card,
-      borderRadius: radii.lg,
-      padding: 18,
-      borderWidth: 1,
-      borderColor: colors.border,
+    equipBtn: {
       marginBottom: 16,
-      ...shadowCard,
+      backgroundColor: colors.primary,
+      paddingVertical: layout.buttonPadV + 2,
+      paddingHorizontal: layout.buttonPadH,
+      borderRadius: radii.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 56,
     },
-    equipTitle: {
-      color: colors.text,
-      fontSize: 18,
+    equipBtnText: {
+      color: colors.onPrimary,
       fontWeight: '700',
-      marginBottom: 10,
+      fontSize: layout.fontSizeButton,
     },
     btn: {
       marginTop: 4,
@@ -483,6 +483,17 @@ export default function ProfileScreen({ navigation }: Props) {
         ) : null}
       </View>
 
+      {showEquipment ? (
+        <Pressable
+          style={styles.equipBtn}
+          onPress={() => navigation.navigate('EquipmentList')}
+          accessibilityRole="button"
+          accessibilityLabel="Оборудование"
+        >
+          <Text style={styles.equipBtnText}>Оборудование</Text>
+        </Pressable>
+      ) : null}
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Тема оформления</Text>
         <View style={styles.themeRow}>
@@ -512,15 +523,6 @@ export default function ProfileScreen({ navigation }: Props) {
           </View>
         ))}
       </View>
-
-      {showEquipment ? (
-        <Pressable style={styles.equipCard} onPress={() => navigation.navigate('EquipmentList')}>
-          <Text style={styles.equipTitle}>Оборудование IT</Text>
-          <Text style={styles.helpHint}>
-            Список, создание и редактирование техники, поиск по QR. Доступно администраторам и IT-службе.
-          </Text>
-        </Pressable>
-      ) : null}
 
       <Pressable
         style={styles.helpCard}

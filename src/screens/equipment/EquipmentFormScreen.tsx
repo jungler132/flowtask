@@ -1,5 +1,5 @@
 import { StackScreenProps } from '@react-navigation/stack';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,6 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
-import { formatApiErrorForUser } from '../../api/client';
 import {
   buildEquipmentPayload,
   createEquipment,
@@ -23,6 +22,16 @@ import {
 } from '../../api/equipmentApi';
 import { fetchBranches, type ReferenceItem } from '../../api/referencesApi';
 import { useTheme } from '../../context/ThemeContext';
+import {
+  EQUIPMENT_REQUIRED_HINT,
+  errorsFromApiError,
+  isEquipmentFieldRequired,
+  mergeEquipmentErrors,
+  validateEquipmentForm,
+  type EquipmentFormField,
+  type EquipmentFormState,
+} from '../../lib/equipmentValidation';
+import { generateEquipmentQrId } from '../../lib/equipmentQr';
 import { useTabScrollBottomPadding } from '../../lib/screenInsets';
 import type { ProfileStackParamList } from '../../navigation/types';
 import type { ThemeColors } from '../../theme';
@@ -34,7 +43,11 @@ function refBranchName(item: ReferenceItem): string {
   return String(item.name ?? item.title ?? item.value ?? item.branch_name ?? '').trim();
 }
 
-function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))['radii'], shadowCard: ViewStyle) {
+function createStyles(
+  colors: ThemeColors,
+  radii: (typeof import('../../theme'))['radii'],
+  shadowCard: ViewStyle,
+) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.bg },
     scroll: { padding: 16 },
@@ -47,8 +60,32 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
       ...shadowCard,
       marginBottom: 12,
     },
+    sectionError: { borderColor: colors.danger },
+    screenTitle: {
+      color: colors.text,
+      fontSize: 22,
+      fontWeight: '700',
+      marginBottom: 8,
+    },
+    requiredHint: {
+      color: colors.muted,
+      fontSize: 14,
+      lineHeight: 20,
+      marginBottom: 14,
+    },
+    formErrorBanner: {
+      backgroundColor: `${colors.danger}18`,
+      borderWidth: 1,
+      borderColor: colors.danger,
+      borderRadius: radii.md,
+      padding: 12,
+      marginBottom: 12,
+    },
+    formErrorBannerText: { color: colors.danger, fontSize: 14, lineHeight: 20 },
     sectionTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 10 },
     label: { color: colors.muted, fontSize: 14, fontWeight: '600', marginBottom: 6, marginTop: 8 },
+    labelError: { color: colors.danger },
+    requiredMark: { color: colors.danger },
     input: {
       borderWidth: 1,
       borderColor: colors.border,
@@ -59,7 +96,15 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
       color: colors.text,
       backgroundColor: colors.bg,
     },
+    inputError: { borderColor: colors.danger, borderWidth: 2 },
+    fieldError: { color: colors.danger, fontSize: 13, marginTop: 4 },
     chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    chipRowError: {
+      borderWidth: 2,
+      borderColor: colors.danger,
+      borderRadius: radii.md,
+      padding: 6,
+    },
     chip: {
       paddingVertical: 8,
       paddingHorizontal: 10,
@@ -71,6 +116,39 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
     chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
     chipText: { fontSize: 13, fontWeight: '600', color: colors.text },
     chipTextActive: { color: colors.onPrimary },
+    toggleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 4,
+      marginBottom: 8,
+      paddingVertical: 8,
+    },
+    toggleLabel: { color: colors.text, fontSize: 16, fontWeight: '600', flex: 1, paddingRight: 12 },
+    toggleHint: { color: colors.muted, fontSize: 13, lineHeight: 18, marginBottom: 8 },
+    toggleBtn: {
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: radii.pill,
+      borderWidth: 2,
+      borderColor: colors.border,
+      backgroundColor: colors.chip,
+      minWidth: 52,
+      alignItems: 'center',
+    },
+    toggleBtnOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+    toggleBtnText: { fontWeight: '700', fontSize: 14, color: colors.muted },
+    toggleBtnTextOn: { color: colors.primary },
+    qrRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    qrInput: { flex: 1 },
+    regenBtn: {
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.primary,
+    },
+    regenBtnText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
     save: {
       backgroundColor: colors.primary,
       paddingVertical: 14,
@@ -85,16 +163,40 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
 
 const EMPTY_FORM = equipmentToForm({});
 
+function FieldLabel({
+  label,
+  required,
+  error,
+  styles,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <Text style={[styles.label, error && styles.labelError]}>
+      {label}
+      {required ? <Text style={styles.requiredMark}> *</Text> : null}
+    </Text>
+  );
+}
+
 export default function EquipmentFormScreen({ route, navigation }: Props) {
   const editId = route.params?.equipmentId;
   const { colors, radii, shadowCard } = useTheme();
   const styles = useMemo(() => createStyles(colors, radii, shadowCard), [colors, radii, shadowCard]);
   const tabScrollBottom = useTabScrollBottomPadding();
+  const scrollRef = useRef<ScrollView>(null);
 
   const [loading, setLoading] = useState(!!editId);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState<EquipmentFormState>(EMPTY_FORM);
   const [branches, setBranches] = useState<ReferenceItem[]>([]);
+  const [errors, setErrors] = useState<Partial<Record<EquipmentFormField, string>>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [formMessage, setFormMessage] = useState<string | null>(null);
+  const [autoGenerateQr, setAutoGenerateQr] = useState(false);
 
   useEffect(() => {
     fetchBranches({ page: 1 })
@@ -103,17 +205,14 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!editId) {
-      navigation.setOptions({ title: 'Новое оборудование' });
-      return;
-    }
+    if (!editId) return;
     (async () => {
       try {
         const eq = await fetchEquipment(editId);
         setForm(equipmentToForm(eq));
-        navigation.setOptions({ title: 'Редактирование' });
       } catch (e) {
-        Alert.alert('Ошибка', formatApiErrorForUser(e));
+        const { message } = errorsFromApiError(e);
+        Alert.alert('Ошибка', message ?? 'Не удалось загрузить оборудование');
         navigation.goBack();
       } finally {
         setLoading(false);
@@ -121,32 +220,81 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
     })();
   }, [editId, navigation]);
 
-  function setField<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+  function clearFieldError(key: EquipmentFormField) {
+    setErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      if (key === 'model_name' || key === 'inventory_number' || key === 'serial_number') {
+        delete next.model_name;
+        delete next.inventory_number;
+        delete next.serial_number;
+      }
+      return next;
+    });
+    setFormMessage(null);
+  }
+
+  function setField<K extends EquipmentFormField>(key: K, value: EquipmentFormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+    clearFieldError(key);
+  }
+
+  function onAutoGenerateQrToggle() {
+    const next = !autoGenerateQr;
+    setAutoGenerateQr(next);
+    if (next && !form.qr_id.trim()) {
+      setField('qr_id', generateEquipmentQrId());
+    }
+  }
+
+  function regenerateQrId() {
+    setField('qr_id', generateEquipmentQrId());
+  }
+
+  function fieldError(key: EquipmentFormField): string | undefined {
+    return submitAttempted ? errors[key] : undefined;
   }
 
   async function save() {
-    if (!form.model_name.trim() && !form.inventory_number.trim() && !form.serial_number.trim()) {
-      Alert.alert('Укажите модель, инвентарный или серийный номер');
+    setSubmitAttempted(true);
+    setFormMessage(null);
+
+    let payloadForm = form;
+    if (autoGenerateQr && !form.qr_id.trim()) {
+      payloadForm = { ...form, qr_id: generateEquipmentQrId() };
+      setForm(payloadForm);
+    }
+
+    const localErrors = validateEquipmentForm(payloadForm);
+    if (Object.keys(localErrors).length > 0) {
+      setErrors(localErrors);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
       return;
     }
+
     setBusy(true);
     try {
-      const body = buildEquipmentPayload(form);
+      const body = buildEquipmentPayload(payloadForm);
       if (editId) {
         await patchEquipment(editId, body);
         navigation.replace('EquipmentDetail', { equipmentId: editId });
       } else {
         const created = await createEquipment(body);
-        const id = String(created.id ?? created._id ?? '').trim();
-        if (id) {
-          navigation.replace('EquipmentDetail', { equipmentId: id });
+        const newId = String(created.id ?? created._id ?? '').trim();
+        const showQr = autoGenerateQr && !!String(payloadForm.qr_id).trim();
+        if (newId) {
+          navigation.replace('EquipmentDetail', { equipmentId: newId, showQrModal: showQr });
         } else {
-          navigation.goBack();
+          navigation.navigate('EquipmentList');
         }
       }
     } catch (e) {
-      Alert.alert('Ошибка', formatApiErrorForUser(e));
+      const { fieldErrors, message } = errorsFromApiError(e);
+      const merged = mergeEquipmentErrors(validateEquipmentForm(payloadForm), fieldErrors);
+      setErrors(merged);
+      setFormMessage(message);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     } finally {
       setBusy(false);
     }
@@ -160,6 +308,9 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
     );
   }
 
+  const typeErr = fieldError('equipment_type');
+  const statusErr = fieldError('status');
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -167,13 +318,32 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
       keyboardVerticalOffset={80}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[styles.scroll, { paddingBottom: tabScrollBottom }]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.section}>
+        <Text style={styles.screenTitle}>{editId ? 'Редактирование' : 'Новое оборудование'}</Text>
+        {!editId ? <Text style={styles.requiredHint}>{EQUIPMENT_REQUIRED_HINT}</Text> : null}
+
+        {formMessage ? (
+          <View style={styles.formErrorBanner}>
+            <Text style={styles.formErrorBannerText}>{formMessage}</Text>
+          </View>
+        ) : null}
+
+        {submitAttempted && Object.keys(errors).length > 0 && !formMessage ? (
+          <View style={styles.formErrorBanner}>
+            <Text style={styles.formErrorBannerText}>
+              Проверьте поля, отмеченные красным.
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={[styles.section, (typeErr || statusErr) && styles.sectionError]}>
           <Text style={styles.sectionTitle}>Основное</Text>
-          <Text style={styles.label}>Тип</Text>
-          <View style={styles.chipRow}>
+
+          <FieldLabel label="Тип" required styles={styles} error={typeErr} />
+          <View style={[styles.chipRow, typeErr && styles.chipRowError]}>
             {EQUIPMENT_TYPE_OPTIONS.map((o) => (
               <Pressable
                 key={o.value}
@@ -188,9 +358,10 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
               </Pressable>
             ))}
           </View>
+          {typeErr ? <Text style={styles.fieldError}>{typeErr}</Text> : null}
 
-          <Text style={styles.label}>Статус</Text>
-          <View style={styles.chipRow}>
+          <FieldLabel label="Статус" styles={styles} error={statusErr} />
+          <View style={[styles.chipRow, statusErr && styles.chipRowError]}>
             {EQUIPMENT_STATUS_OPTIONS.map((o) => (
               <Pressable
                 key={o.value || 'none'}
@@ -203,49 +374,39 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
               </Pressable>
             ))}
           </View>
+          {statusErr ? <Text style={styles.fieldError}>{statusErr}</Text> : null}
 
-          <Text style={styles.label}>Модель</Text>
-          <TextInput
-            style={styles.input}
-            value={form.model_name}
-            onChangeText={(v) => setField('model_name', v)}
-            placeholder="Модель"
-            placeholderTextColor={colors.muted}
-          />
-          <Text style={styles.label}>Производитель</Text>
-          <TextInput
-            style={styles.input}
-            value={form.manufacturer}
-            onChangeText={(v) => setField('manufacturer', v)}
-            placeholder="Производитель"
-            placeholderTextColor={colors.muted}
-          />
-          <Text style={styles.label}>Инвентарный №</Text>
-          <TextInput
-            style={styles.input}
-            value={form.inventory_number}
-            onChangeText={(v) => setField('inventory_number', v)}
-            placeholder="Инвентарный номер"
-            placeholderTextColor={colors.muted}
-          />
-          <Text style={styles.label}>Серийный №</Text>
-          <TextInput
-            style={styles.input}
-            value={form.serial_number}
-            onChangeText={(v) => setField('serial_number', v)}
-            placeholder="Серийный номер"
-            placeholderTextColor={colors.muted}
-          />
-          <Text style={styles.label}>Кабинет</Text>
-          <TextInput
-            style={styles.input}
-            value={form.room}
-            onChangeText={(v) => setField('room', v)}
-            placeholder="Кабинет"
-            placeholderTextColor={colors.muted}
-          />
+          {(
+            [
+              ['model_name', 'Модель'],
+              ['manufacturer', 'Производитель'],
+              ['inventory_number', 'Инвентарный №'],
+              ['serial_number', 'Серийный №'],
+              ['room', 'Кабинет'],
+            ] as const
+          ).map(([key, label]) => {
+            const err = fieldError(key);
+            return (
+              <View key={key}>
+                <FieldLabel
+                  label={label}
+                  required={isEquipmentFieldRequired(key)}
+                  styles={styles}
+                  error={err}
+                />
+                <TextInput
+                  style={[styles.input, err && styles.inputError]}
+                  value={form[key]}
+                  onChangeText={(v) => setField(key, v)}
+                  placeholder={label}
+                  placeholderTextColor={colors.muted}
+                />
+                {err ? <Text style={styles.fieldError}>{err}</Text> : null}
+              </View>
+            );
+          })}
 
-          <Text style={styles.label}>Филиал</Text>
+          <FieldLabel label="Филиал" styles={styles} />
           <View style={styles.chipRow}>
             {branches.slice(0, 24).map((b, i) => {
               const name = refBranchName(b);
@@ -276,6 +437,57 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Сеть и идентификаторы</Text>
+
+          {!editId ? (
+            <>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Сгенерировать QR-код</Text>
+                <Pressable
+                  style={[styles.toggleBtn, autoGenerateQr && styles.toggleBtnOn]}
+                  onPress={onAutoGenerateQrToggle}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: autoGenerateQr }}
+                >
+                  <Text style={[styles.toggleBtnText, autoGenerateQr && styles.toggleBtnTextOn]}>
+                    {autoGenerateQr ? 'Да' : 'Нет'}
+                  </Text>
+                </Pressable>
+              </View>
+              {autoGenerateQr ? (
+                <Text style={styles.toggleHint}>
+                  Будет создан уникальный QR ID. После сохранения можно поделиться или сохранить
+                  наклейку в галерею.
+                </Text>
+              ) : null}
+            </>
+          ) : null}
+
+          <FieldLabel label="QR ID" styles={styles} error={fieldError('qr_id')} />
+          <View style={styles.qrRow}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.qrInput,
+                fieldError('qr_id') && styles.inputError,
+              ]}
+              value={form.qr_id}
+              onChangeText={(v) => {
+                setAutoGenerateQr(false);
+                setField('qr_id', v);
+              }}
+              placeholder="Идентификатор для QR-наклейки"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              editable={!autoGenerateQr || !!editId}
+            />
+            {autoGenerateQr && !editId ? (
+              <Pressable style={styles.regenBtn} onPress={regenerateQrId}>
+                <Text style={styles.regenBtnText}>Новый</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {fieldError('qr_id') ? <Text style={styles.fieldError}>{fieldError('qr_id')}</Text> : null}
+
           {(
             [
               ['MAC_address', 'MAC-адрес'],
@@ -285,44 +497,52 @@ export default function EquipmentFormScreen({ route, navigation }: Props) {
               ['tt_number', 'ТТ'],
               ['imei', 'IMEI'],
               ['phone_number', 'Телефон'],
-              ['qr_id', 'QR ID'],
               ['ip_assignment', 'IP (число назначения)'],
             ] as const
-          ).map(([key, label]) => (
-            <View key={key}>
-              <Text style={styles.label}>{label}</Text>
-              <TextInput
-                style={styles.input}
-                value={form[key]}
-                onChangeText={(v) => setField(key, v)}
-                placeholder={label}
-                placeholderTextColor={colors.muted}
-                autoCapitalize={key === 'MAC_address' ? 'characters' : 'none'}
-              />
-            </View>
-          ))}
+          ).map(([key, label]) => {
+            const err = fieldError(key);
+            return (
+              <View key={key}>
+                <FieldLabel label={label} styles={styles} error={err} />
+                <TextInput
+                  style={[styles.input, err && styles.inputError]}
+                  value={form[key]}
+                  onChangeText={(v) => setField(key, v)}
+                  placeholder={label}
+                  placeholderTextColor={colors.muted}
+                  autoCapitalize={key === 'MAC_address' ? 'characters' : 'none'}
+                  keyboardType={key === 'ip_assignment' ? 'number-pad' : 'default'}
+                />
+                {err ? <Text style={styles.fieldError}>{err}</Text> : null}
+              </View>
+            );
+          })}
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Примечания</Text>
-          <Text style={styles.label}>Описание</Text>
-          <TextInput
-            style={[styles.input, { minHeight: 72, textAlignVertical: 'top' }]}
-            value={form.description}
-            onChangeText={(v) => setField('description', v)}
-            multiline
-            placeholder="Описание"
-            placeholderTextColor={colors.muted}
-          />
-          <Text style={styles.label}>Комментарий</Text>
-          <TextInput
-            style={[styles.input, { minHeight: 72, textAlignVertical: 'top' }]}
-            value={form.comment}
-            onChangeText={(v) => setField('comment', v)}
-            multiline
-            placeholder="Комментарий"
-            placeholderTextColor={colors.muted}
-          />
+          {(
+            [
+              ['description', 'Описание'],
+              ['comment', 'Комментарий'],
+            ] as const
+          ).map(([key, label]) => {
+            const err = fieldError(key);
+            return (
+              <View key={key}>
+                <FieldLabel label={label} styles={styles} error={err} />
+                <TextInput
+                  style={[styles.input, { minHeight: 72, textAlignVertical: 'top' }, err && styles.inputError]}
+                  value={form[key]}
+                  onChangeText={(v) => setField(key, v)}
+                  multiline
+                  placeholder={label}
+                  placeholderTextColor={colors.muted}
+                />
+                {err ? <Text style={styles.fieldError}>{err}</Text> : null}
+              </View>
+            );
+          })}
         </View>
 
         <Pressable style={[styles.save, busy && { opacity: 0.65 }]} onPress={() => void save()} disabled={busy}>

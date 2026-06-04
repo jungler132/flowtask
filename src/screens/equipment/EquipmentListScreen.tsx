@@ -1,5 +1,6 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -74,6 +75,36 @@ function createStyles(colors: ThemeColors, radii: (typeof import('../../theme'))
     chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
     chipText: { fontSize: 13, fontWeight: '600', color: colors.muted },
     chipTextActive: { color: colors.onPrimary },
+    filterToggle: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.card,
+      marginBottom: 4,
+    },
+    filterToggleActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primarySoft,
+    },
+    filterToggleText: { fontSize: 15, fontWeight: '600', color: colors.text },
+    filterToggleTextActive: { color: colors.primary },
+    filterBadge: {
+      marginLeft: 8,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 6,
+    },
+    filterBadgeText: { color: colors.onPrimary, fontSize: 12, fontWeight: '700' },
+    filtersPanel: { marginTop: 4 },
     row: {
       marginHorizontal: 12,
       marginTop: 10,
@@ -106,7 +137,7 @@ function statusColor(colors: ThemeColors, key: ReturnType<typeof equipmentStatus
   }
 }
 
-export default function EquipmentListScreen({ navigation }: Props) {
+export default function EquipmentListScreen({ navigation, route }: Props) {
   const { user } = useAuth();
   const { colors, radii, shadowCard } = useTheme();
   const styles = useMemo(() => createStyles(colors, radii, shadowCard), [colors, radii, shadowCard]);
@@ -121,6 +152,9 @@ export default function EquipmentListScreen({ navigation }: Props) {
   const [searchDebounced, setSearchDebounced] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const activeFilterCount = (typeFilter ? 1 : 0) + (statusFilter ? 1 : 0);
 
   useEffect(() => {
     if (!canManageEquipment(user)) {
@@ -179,7 +213,28 @@ export default function EquipmentListScreen({ navigation }: Props) {
   }, [load, user]);
 
   useEffect(() => {
+    const deletedId = route.params?.deletedId?.trim();
+    if (!deletedId) return;
+    setItems((prev) => prev.filter((item) => equipmentId(item) !== deletedId));
+    navigation.setParams({ deletedId: undefined });
+  }, [route.params?.deletedId, navigation]);
+
+  const skipFocusReload = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (!canManageEquipment(user)) return;
+      if (skipFocusReload.current) {
+        skipFocusReload.current = false;
+        return;
+      }
+      load({ page: 1, refresh: true }).catch(() => {});
+    }, [load, user]),
+  );
+
+  useEffect(() => {
     navigation.setOptions({
+      title: '',
+      headerTitle: () => null,
       headerRight: () => (
         <HeaderRow>
           <HeaderOutlineButton label="Скан QR" onPress={() => navigation.navigate('EquipmentQr')} />
@@ -235,52 +290,82 @@ export default function EquipmentListScreen({ navigation }: Props) {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.chipRow}>
-            <Pressable
-              style={[styles.chip, !typeFilter && styles.chipActive]}
-              onPress={() => setTypeFilter('')}
-            >
-              <Text style={[styles.chipText, !typeFilter && styles.chipTextActive]}>Все типы</Text>
-            </Pressable>
-            {EQUIPMENT_TYPE_OPTIONS.map((o) => (
-              <Pressable
-                key={o.value}
-                style={[styles.chip, typeFilter === o.value && styles.chipActive]}
-                onPress={() => setTypeFilter(typeFilter === o.value ? '' : o.value)}
-              >
-                <Text
-                  style={[styles.chipText, typeFilter === o.value && styles.chipTextActive]}
+        <Pressable
+          style={[
+            styles.filterToggle,
+            (filtersOpen || activeFilterCount > 0) && styles.filterToggleActive,
+          ]}
+          onPress={() => setFiltersOpen((v) => !v)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: filtersOpen }}
+        >
+          <Text
+            style={[
+              styles.filterToggleText,
+              (filtersOpen || activeFilterCount > 0) && styles.filterToggleTextActive,
+            ]}
+          >
+            {filtersOpen ? 'Скрыть фильтры' : 'Фильтры'}
+          </Text>
+          {activeFilterCount > 0 ? (
+            <View style={styles.filterBadge}>
+              <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+
+        {filtersOpen ? (
+          <View style={styles.filtersPanel}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.chipRow}>
+                <Pressable
+                  style={[styles.chip, !typeFilter && styles.chipActive]}
+                  onPress={() => setTypeFilter('')}
                 >
-                  {o.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.chipRow}>
-            <Pressable
-              style={[styles.chip, !statusFilter && styles.chipActive]}
-              onPress={() => setStatusFilter('')}
-            >
-              <Text style={[styles.chipText, !statusFilter && styles.chipTextActive]}>Все статусы</Text>
-            </Pressable>
-            {EQUIPMENT_STATUS_OPTIONS.filter((o) => o.value !== '').map((o) => (
-              <Pressable
-                key={o.value || 'blank'}
-                style={[styles.chip, statusFilter === o.value && styles.chipActive]}
-                onPress={() => setStatusFilter(statusFilter === o.value ? '' : o.value)}
-              >
-                <Text
-                  style={[styles.chipText, statusFilter === o.value && styles.chipTextActive]}
+                  <Text style={[styles.chipText, !typeFilter && styles.chipTextActive]}>Все типы</Text>
+                </Pressable>
+                {EQUIPMENT_TYPE_OPTIONS.map((o) => (
+                  <Pressable
+                    key={o.value}
+                    style={[styles.chip, typeFilter === o.value && styles.chipActive]}
+                    onPress={() => setTypeFilter(typeFilter === o.value ? '' : o.value)}
+                  >
+                    <Text
+                      style={[styles.chipText, typeFilter === o.value && styles.chipTextActive]}
+                    >
+                      {o.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.chipRow}>
+                <Pressable
+                  style={[styles.chip, !statusFilter && styles.chipActive]}
+                  onPress={() => setStatusFilter('')}
                 >
-                  {o.label}
-                </Text>
-              </Pressable>
-            ))}
+                  <Text style={[styles.chipText, !statusFilter && styles.chipTextActive]}>
+                    Все статусы
+                  </Text>
+                </Pressable>
+                {EQUIPMENT_STATUS_OPTIONS.filter((o) => o.value !== '').map((o) => (
+                  <Pressable
+                    key={o.value || 'blank'}
+                    style={[styles.chip, statusFilter === o.value && styles.chipActive]}
+                    onPress={() => setStatusFilter(statusFilter === o.value ? '' : o.value)}
+                  >
+                    <Text
+                      style={[styles.chipText, statusFilter === o.value && styles.chipTextActive]}
+                    >
+                      {o.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
           </View>
-        </ScrollView>
+        ) : null}
       </View>
 
       {loading && items.length === 0 ? (

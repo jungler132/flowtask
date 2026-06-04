@@ -167,22 +167,22 @@ function ProfileNavigator() {
       <ProfileStack.Screen
         name="EquipmentList"
         component={EquipmentListScreen}
-        options={{ title: 'Оборудование' }}
+        options={{ title: '', headerTitle: () => null }}
       />
       <ProfileStack.Screen
         name="EquipmentDetail"
         component={EquipmentDetailScreen}
-        options={{ title: 'Оборудование' }}
+        options={{ title: '', headerTitle: () => null }}
       />
       <ProfileStack.Screen
         name="EquipmentForm"
         component={EquipmentFormScreen}
-        options={{ title: 'Оборудование' }}
+        options={{ title: '', headerTitle: () => null }}
       />
       <ProfileStack.Screen
         name="EquipmentQr"
         component={EquipmentQrScreen}
-        options={{ title: 'Скан QR' }}
+        options={{ title: '', headerTitle: () => null }}
       />
     </ProfileStack.Navigator>
   );

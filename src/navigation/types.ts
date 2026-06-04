@@ -24,8 +24,8 @@ export type TasksStackParamList = {
 export type ProfileStackParamList = {
   ProfileMain: undefined;
   TaskPasswordReset: undefined;
-  EquipmentList: undefined;
-  EquipmentDetail: { equipmentId: string };
+  EquipmentList: { deletedId?: string } | undefined;
+  EquipmentDetail: { equipmentId: string; showQrModal?: boolean };
   EquipmentForm: { equipmentId?: string };
   EquipmentQr: undefined;
 };
